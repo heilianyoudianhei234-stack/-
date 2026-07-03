@@ -1,0 +1,18 @@
+[project]
+name = "blackcat-phone"
+version = "1.0.0"
+description = "BlackCat 手机版 —— 跨设备 AI 助手"
+requires-python = ">=3.10"
+dependencies = [
+    "flet==0.85.3",
+    "requests",
+]
+
+[tool.flet]
+org = "com.blackcat"
+product = "BlackCat"
+company = "BlackCat"
+
+[tool.flet.app]
+path = "."
+module = "main"
