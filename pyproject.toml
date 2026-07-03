@@ -16,3 +16,4 @@ company = "BlackCat"
 [tool.flet.app]
 path = "."
 module = "main"
+icon = "blackc_icon.png"
