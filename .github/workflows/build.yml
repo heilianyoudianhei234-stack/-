@@ -34,12 +34,11 @@ jobs:
           flutter-version: '3.24.0'
           channel: 'stable'
 
-      - name: Flet Build APK
-        env:
-         CI: "true"
+      - name: Flet 构建 APK
         run: |
           flutter config --no-analytics
-          yes | flet build apk --verbose --no-interactive
+          yes | flet build apk --verbose
+
 
 
       - name: Upload APK artifact
