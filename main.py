@@ -398,10 +398,10 @@ class MicGlow:
 # 第五部分：开屏轮播数据
 # ============================================================
 INTRO_SLIDES = [
-    ("#7C3AED", "#FFFFFF", "Black C", "跨设备的 AI 助手"),
-    ("#0B1220", "#FDE68A", "一起集思广益 ⬤", ""),
-    ("#FCEFC7", "#2563EB", "一起创建 ⬤", ""),
-    ("#E91E8C", "#111111", "Black C ⬤", ""),
+    ("#6C63FF", "#FFFFFF", "Black C", "手机和电脑，一个账号打通"),
+    ("#0B1220", "#8B85FF", "指哪打哪", "一句话下发指令，电脑自动执行"),
+    ("#FCEFC7", "#6C63FF", "随身带走", "对话记录跨设备同步，不丢上下文"),
+    ("#101418", "#4CC38A", "开始吧", "登录一次，随时随地接着聊"),
 ]
 
 
@@ -423,17 +423,10 @@ async def main(page: ft.Page):
     page.bgcolor = Color.bg
 
     # 震动反馈 + 文件选择器，两者都挂到 page.overlay 上，全局只需要一份
-    haptic = ft.HapticFeedback()
-    file_picker = ft.FilePicker()
-    page.overlay.append(haptic)
-    page.overlay.append(file_picker)
-
-    async def buzz():
-        # 震动API在不同设备/权限下可能不可用，出错就静默跳过，不影响主流程
-        try:
-            await haptic.light_impact()
-        except Exception:
-            pass
+    # 说明：曾经尝试过 HapticFeedback（震动）和 FilePicker（文件选择），
+    # 但实测 FilePicker 在这个Flet运行环境里报 "Unknown control" 直接导致渲染崩溃、黑屏。
+    # HapticFeedback 用的是同一种添加方式（page.overlay.append），大概率有同样风险，
+    # 为了不让你再跑一次同样的崩溃，这两个控件先都不用了。
 
     NAV_ROUTES = ["/chat", "/remote", "/skills", "/settings"]
 
@@ -501,13 +494,15 @@ async def main(page: ft.Page):
         return ft.View(
             route="/intro",
             bgcolor=INTRO_SLIDES[0][0],
+            padding=0,
             controls=[
-                safe(
-                    ft.Stack(
-                        expand=True,
-                        controls=[
-                            bg_container,
-                            ft.Container(
+                ft.Stack(
+                    expand=True,
+                    controls=[
+                        bg_container,  # 色块背景不包SafeArea，铺满整个屏幕(含状态栏/导航栏区域)
+                        ft.SafeArea(
+                            expand=True,
+                            content=ft.Container(
                                 expand=True,
                                 alignment=ft.Alignment.BOTTOM_CENTER,
                                 padding=ft.Padding(left=20, right=20, top=0, bottom=30),
@@ -519,8 +514,8 @@ async def main(page: ft.Page):
                                     on_click=go_login,
                                 ),
                             ),
-                        ],
-                    )
+                        ),
+                    ],
                 ),
             ],
         )
@@ -740,7 +735,6 @@ async def main(page: ft.Page):
         sessions = await storage.list_sessions()
         user = await storage.get_user() or {}
         current_session = {"id": sessions[0]["id"] if sessions else (await storage.create_session())["id"]}
-        pending_attachment = {"name": None}
 
         message_list = ft.ListView(expand=True, spacing=2, auto_scroll=True,
                                      padding=ft.Padding.symmetric(horizontal=Size.pad_page, vertical=12))
@@ -760,37 +754,9 @@ async def main(page: ft.Page):
             content_padding=ft.Padding.symmetric(horizontal=4, vertical=16),
         )
 
-        attachment_chip = ft.Row(visible=False, spacing=6)
-
-        def on_file_picked(e: ft.FilePickerResultEvent):
-            if e.files:
-                pending_attachment["name"] = e.files[0].name
-                attachment_chip.controls = [
-                    ft.Icon(ft.Icons.ATTACH_FILE, size=14, color=Color.text_secondary),
-                    ft.Text(pending_attachment["name"], size=12, color=Color.text_secondary,
-                             max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.IconButton(icon=ft.Icons.CLOSE, icon_size=14, icon_color=Color.text_secondary,
-                                   on_click=clear_attachment),
-                ]
-                attachment_chip.visible = True
-                page.update()
-
-        def clear_attachment(e=None):
-            pending_attachment["name"] = None
-            attachment_chip.visible = False
-            page.update()
-
-        file_picker.on_result = on_file_picked
-
-        async def open_file_picker(e):
-            # 注意：目前只能拿到文件名当附件标记，不会真的读取文件内容/解析Excel数据。
-            await file_picker.pick_files(
-                allow_multiple=False,
-                allowed_extensions=["jpg", "jpeg", "png", "xlsx", "xls", "csv", "pdf", "docx"],
-            )
 
         async def reveal_reply(reply_text: str):
-            """AI回复逐字展现的打字机效果，配合轻微震动反馈。"""
+            """AI回复逐字展现的打字机效果。"""
             text_ctrl = ft.Text("", color=Color.text_primary, size=15, selectable=True, width=290)
             container = ft.Container(content=text_ctrl, padding=ft.Padding.symmetric(horizontal=4, vertical=6),
                                        margin=ft.Margin.only(right=40, top=4, bottom=4))
@@ -799,25 +765,18 @@ async def main(page: ft.Page):
             page.update()
 
             step = 2
-            counter = 0
             for i in range(0, len(reply_text), step):
                 text_ctrl.value = reply_text[: i + step]
                 page.update()
-                counter += 1
-                if counter % 4 == 0:
-                    await buzz()
                 await asyncio.sleep(0.025)
             text_ctrl.value = reply_text
             page.update()
 
         async def send_message(e):
             text = input_field.value.strip()
-            if not text and not pending_attachment["name"]:
+            if not text:
                 return
-            if pending_attachment["name"]:
-                text = f"[附件：{pending_attachment['name']}] {text}".strip()
             input_field.value = ""
-            clear_attachment()
             page.update()
 
             await storage.append_message(current_session["id"], "user", text)
@@ -977,20 +936,15 @@ async def main(page: ft.Page):
         ], spacing=4)
 
         input_bar = ft.Container(
-            content=ft.Column(controls=[
-                attachment_chip,
-                ft.Row(controls=[
-                    ft.IconButton(icon=ft.Icons.ATTACH_FILE, icon_color=Color.text_secondary,
-                                   icon_size=20, on_click=open_file_picker),
-                    input_field,
-                    ft.IconButton(icon=ft.Icons.MIC_NONE_ROUNDED, icon_color=Color.text_secondary,
-                                   icon_size=20, on_click=toggle_mic),
-                    ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color=ft.Colors.WHITE,
-                                   icon_size=18, bgcolor=Color.accent, on_click=send_message),
-                ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
-            ], spacing=4),
+            content=ft.Row(controls=[
+                input_field,
+                ft.IconButton(icon=ft.Icons.MIC_NONE_ROUNDED, icon_color=Color.text_secondary,
+                               icon_size=20, on_click=toggle_mic),
+                ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color=ft.Colors.WHITE,
+                               icon_size=18, bgcolor=Color.accent, on_click=send_message),
+            ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER),
             bgcolor=Color.surface, border_radius=28,
-            padding=ft.Padding(left=10, right=6, top=8, bottom=8),
+            padding=ft.Padding(left=18, right=6, top=8, bottom=8),
             margin=ft.Margin(left=Size.pad_page, right=Size.pad_page, top=0, bottom=18),
         )
 
