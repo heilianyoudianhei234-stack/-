@@ -35,9 +35,12 @@ jobs:
           channel: 'stable'
 
       - name: Flet Build APK
+        env:
+         CI: "true"
         run: |
           flutter config --no-analytics
-          flet build apk --verbose
+          yes | flet build apk --verbose --no-interactive
+
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
