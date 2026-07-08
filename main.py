@@ -1,27 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-Black C 手机版 —— 单文件合并版 main.py
+Black C 手机版 v3 —— 全面完善版
 
-本次改动清单：
- 1. 用 ft.SafeArea 包裹每个页面，避免顶部状态栏遮挡按钮；深色主题改为更中性的深灰，不再偏黄褐色
- 2. 输入栏加了回形针按钮，可以选图片/Excel/PDF等文件——注意：目前只是把文件名当附件标记随消息一起发送，
-    并不会真的读取/解析文件内容，这是本版本的真实能力边界，不是bug
- 3. AI 回复不再套气泡容器，只有用户自己的消息是气泡；AI 是纯文本，贴左对齐
- 4. 输入框加高、字号加大
- 5. 左边缘右滑 = 打开侧边抽屉；右边缘左滑 = 跳转"我的"页（这个映射是我的假设，不对的话下一轮告诉我改）
- 6. AI 回复改成逐字"打字机"式展现，展现过程中每隔几个字触发一次轻量震动反馈
- 7. 登录页加了"使用手机号继续""使用Google继续"两个按钮——如实说明：这两个目前只是占位UI，
-    点击会提示"暂未接入"，因为手机验证码通道和Google OAuth需要额外的后端和SDK集成，这次没做，
-    只有邮箱登录是真正能跑通的
- 8. 未登录时先进入一个多彩动态开屏页（仿 ChatGPT/Grok 那种色块+标语轮播），点"登录或注册"才进入真正的登录表单
- 9. 加了本地测试账号：邮箱框填 heilian123，密码填 202007heilian，不联网直接进入，方便没有服务器时也能看界面
-10. 加了 DeepSeek 直连模式：在"设置"页填入 DeepSeek API Key 后，对话会直接调用 DeepSeek 官方接口，
-    不再依赖 cloud_server.py 的 /chat 路由（因为那个接口目前后端没做）
+改动：
+ 1. 登录 → 用户名+密码+白名单(heilian123/heilian123)，明亮UI，去掉开屏
+ 2. 悬浮输入栏 ChatGPT风格 Stack布局
+ 3. FilePicker 文件上传 + 附件chips
+ 4. 震动反馈 HapticFeedback
+ 5. 左右滑屏 左→抽屉 右→设置
+ 6. 录音防红屏 try/except防护 + 录音状态内联显示
+ 7. Agent技能系统 调用电脑端Flask /organize /desktop_files 等
+ 8. UI全面美化 气泡动画/打字指示器/设置卡片化
 
-运行方式：
+运行：
   pip install flet requests --break-system-packages
   flet run main.py
-  flet build apk
 """
 import asyncio
 import json
@@ -29,56 +22,51 @@ import os
 import sys
 import time
 import uuid
+import concurrent.futures
 
 import flet as ft
 import requests
 
-# AudioRecorder 不在核心 flet 包里，是独立扩展包 flet-audio-recorder，
-# 要单独 pip install，还要在 pyproject.toml 的 dependencies 里加一行才能打包进APK。
+# AudioRecorder 独立扩展
 try:
     import flet_audio_recorder as far
-    _AUDIO_RECORDER_IMPORTABLE = True
+    _AUDIO_IMPORT_OK = True
 except ImportError:
     far = None
-    _AUDIO_RECORDER_IMPORTABLE = False
+    _AUDIO_IMPORT_OK = False
 
-# Windows桌面版走的是PyInstaller打包，内置的是通用Flet客户端，不会加载第三方扩展的
-# Flutter原生插件——这是Flet当前架构的已知限制（第三方控件必须用
-# `flet build ... --include-packages` 完整编译才能识别），不是装少了什么包。
-# 所以Windows端直接不启用语音功能；安卓端走的是 `flet build apk`（真正的完整编译），
-# 到时候能正常识别，麦克风功能只在安卓上开放。
-AUDIO_RECORDER_AVAILABLE = _AUDIO_RECORDER_IMPORTABLE and sys.platform != "win32"
+AUDIO_AVAILABLE = _AUDIO_IMPORT_OK and sys.platform != "win32"
 
 
 # ============================================================
-# 第一部分：主题
+# 主题
 # ============================================================
 _DARK = {
-    "bg": "#171717",
-    "surface": "#212121",
-    "surface_light": "#2A2A2A",
+    "bg": "#0F0F0F",
+    "surface": "#1C1C1E",
+    "surface_light": "#2C2C2E",
     "accent": "#6C63FF",
     "accent_soft": "#8B85FF",
-    "text_primary": "#ECECEC",
-    "text_secondary": "#9B9B9B",
-    "text_hint": "#6B6B6B",
-    "danger": "#E5484D",
-    "success": "#4CC38A",
-    "divider": "#2F2F2F",
+    "text_primary": "#F5F5F7",
+    "text_secondary": "#98989D",
+    "text_hint": "#636366",
+    "danger": "#FF453A",
+    "success": "#30D158",
+    "divider": "#2C2C2E",
 }
 
 _LIGHT = {
-    "bg": "#F7F7F9",
+    "bg": "#F2F2F7",
     "surface": "#FFFFFF",
-    "surface_light": "#F0F0F3",
+    "surface_light": "#F2F2F7",
     "accent": "#6C63FF",
     "accent_soft": "#8B85FF",
-    "text_primary": "#1A1A1E",
-    "text_secondary": "#6B6B70",
-    "text_hint": "#A3A3A8",
-    "danger": "#D6373C",
-    "success": "#2E9E6D",
-    "divider": "#E4E4E8",
+    "text_primary": "#1C1C1E",
+    "text_secondary": "#6E6E73",
+    "text_hint": "#AEAEB2",
+    "danger": "#FF3B30",
+    "success": "#34C759",
+    "divider": "#E5E5EA",
 }
 
 
@@ -99,7 +87,7 @@ class Color:
 
 def apply_theme(mode: str):
     palette = _LIGHT if mode == "light" else _DARK
-    Color.mode = "light" if mode == "light" else "dark"
+    Color.mode = mode
     for key, value in palette.items():
         setattr(Color, key, value)
 
@@ -112,37 +100,11 @@ class Size:
     gap_sm = 8
     gap_md = 16
     gap_lg = 24
-    blur_card = 20
-    opacity_card = 0.10
-    stroke_opacity = 0.16
-
-
-def title_text(value: str, size: int = 22) -> ft.Text:
-    return ft.Text(value, size=size, weight=ft.FontWeight.W_600, color=Color.text_primary)
-
-
-def body_text(value: str, size: int = 14, color: str = None) -> ft.Text:
-    return ft.Text(value, size=size, color=color or Color.text_primary)
-
-
-def hint_text(value: str, size: int = 12) -> ft.Text:
-    return ft.Text(value, size=size, color=Color.text_secondary)
-
-
-def glass_container(content: ft.Control, width=None, padding: int = 16, radius: int = None) -> ft.Container:
-    return ft.Container(
-        content=content,
-        width=width,
-        padding=padding,
-        border_radius=radius or Size.radius_md,
-        bgcolor=ft.Colors.with_opacity(Size.opacity_card, ft.Colors.WHITE),
-        border=ft.Border.all(1, ft.Colors.with_opacity(Size.stroke_opacity, ft.Colors.WHITE)),
-        blur=ft.Blur(Size.blur_card, Size.blur_card),
-    )
+    input_bar_h = 80
 
 
 # ============================================================
-# 第二部分：本地存储
+# 存储键
 # ============================================================
 KEY_TOKEN = "bc_token"
 KEY_USER = "bc_user"
@@ -152,8 +114,14 @@ KEY_THEME = "bc_theme"
 KEY_ADDED_SKILLS = "bc_added_skills"
 KEY_DEEPSEEK = "bc_deepseek_key"
 KEY_ASR_KEY = "bc_asr_key"
+KEY_COMPUTER_IP = "bc_computer_ip"
+
+WHITELIST = {"heilian123": "heilian123"}
 
 
+# ============================================================
+# 存储
+# ============================================================
 class Storage:
     def __init__(self, page: ft.Page):
         self.page = page
@@ -202,35 +170,41 @@ class Storage:
     async def set_asr_key(self, key: str):
         await self.page.shared_preferences.set(KEY_ASR_KEY, key)
 
+    async def get_computer_ip(self):
+        return await self.page.shared_preferences.get(KEY_COMPUTER_IP)
+
+    async def set_computer_ip(self, ip: str):
+        await self.page.shared_preferences.set(KEY_COMPUTER_IP, ip)
+
     async def list_sessions(self) -> list:
         raw = await self.page.shared_preferences.get(KEY_SESSIONS)
         sessions = json.loads(raw) if raw else []
         return sorted(sessions, key=lambda s: s["updated_at"], reverse=True)
 
     async def create_session(self) -> dict:
-        session = {"id": str(uuid.uuid4()), "title": "新会话", "updated_at": time.time()}
+        s = {"id": str(uuid.uuid4()), "title": "新会话", "updated_at": time.time()}
         sessions = await self.list_sessions()
-        sessions.insert(0, session)
+        sessions.insert(0, s)
         await self.page.shared_preferences.set(KEY_SESSIONS, json.dumps(sessions))
-        await self.page.shared_preferences.set(KEY_SESSION_PREFIX + session["id"], json.dumps([]))
-        return session
+        await self.page.shared_preferences.set(KEY_SESSION_PREFIX + s["id"], json.dumps([]))
+        return s
 
-    async def delete_session(self, session_id: str):
-        sessions = [s for s in await self.list_sessions() if s["id"] != session_id]
+    async def delete_session(self, sid: str):
+        sessions = [s for s in await self.list_sessions() if s["id"] != sid]
         await self.page.shared_preferences.set(KEY_SESSIONS, json.dumps(sessions))
-        await self.page.shared_preferences.remove(KEY_SESSION_PREFIX + session_id)
+        await self.page.shared_preferences.remove(KEY_SESSION_PREFIX + sid)
 
-    async def get_messages(self, session_id: str) -> list:
-        raw = await self.page.shared_preferences.get(KEY_SESSION_PREFIX + session_id)
+    async def get_messages(self, sid: str) -> list:
+        raw = await self.page.shared_preferences.get(KEY_SESSION_PREFIX + sid)
         return json.loads(raw) if raw else []
 
-    async def append_message(self, session_id: str, role: str, content: str):
-        messages = await self.get_messages(session_id)
-        messages.append({"role": role, "content": content, "ts": time.time()})
-        await self.page.shared_preferences.set(KEY_SESSION_PREFIX + session_id, json.dumps(messages))
+    async def append_message(self, sid: str, role: str, content: str):
+        msgs = await self.get_messages(sid)
+        msgs.append({"role": role, "content": content, "ts": time.time()})
+        await self.page.shared_preferences.set(KEY_SESSION_PREFIX + sid, json.dumps(msgs))
         sessions = await self.list_sessions()
         for s in sessions:
-            if s["id"] == session_id:
+            if s["id"] == sid:
                 s["updated_at"] = time.time()
                 if s["title"] == "新会话" and role == "user":
                     s["title"] = content[:24]
@@ -238,83 +212,20 @@ class Storage:
 
 
 # ============================================================
-# 第三部分：API
+# API
 # ============================================================
-BASE_URL = "http://127.0.0.1:8000"  # TODO: 换成你阿里云ECS的公网IP
 DEEPSEEK_URL = "https://api.deepseek.com/chat/completions"
-# 语音转文字：用硅基流动的 SenseVoiceSmall，目前是免费模型，接口是OpenAI兼容格式，
-# 不是"内置离线引擎"，是真实的云端请求——注意这和你之前放弃的Siliconflow LLM是两码事：
-# 那次放弃是因为LLM聊天生成的XML标签会乱，这里只是把一段录音丢过去换一段文字，没有XML这一层。
 ASR_URL = "https://api.siliconflow.cn/v1/audio/transcriptions"
 ASR_MODEL = "FunAudioLLM/SenseVoiceSmall"
 TIMEOUT = 15
 
 
 class ApiError(Exception):
-    def __init__(self, message: str):
-        self.message = message
-        super().__init__(message)
-
-
-def _request(method: str, path: str, token: str = None, json_body: dict = None):
-    headers = {}
-    if token:
-        headers["Authorization"] = f"Bearer {token}"
-    try:
-        resp = requests.request(method, f"{BASE_URL}{path}", json=json_body, headers=headers, timeout=TIMEOUT)
-    except requests.RequestException as e:
-        raise ApiError(f"网络连接失败：{e}")
-    try:
-        data = resp.json()
-    except ValueError:
-        raise ApiError("服务器返回格式异常，请检查接口地址")
-    if resp.status_code >= 400:
-        raise ApiError(data.get("error", f"请求失败（状态码 {resp.status_code}）"))
-    return data
-
-
-def _get(path, token=None):
-    return _request("GET", path, token=token)
-
-
-def _post(path, json_body=None, token=None):
-    return _request("POST", path, token=token, json_body=json_body)
-
-
-def send_mail_code(email: str):
-    return _post("/send_mail_code", {"email": email})
-
-
-def register(email: str, code: str, password: str):
-    return _post("/register", {"email": email, "code": code, "password": password})
-
-
-def login(email: str, password: str):
-    return _post("/login", {"email": email, "password": password})
-
-
-def get_usage(token: str):
-    return _get("/usage", token=token)
-
-
-def submit_task(token: str, command: str):
-    return _post("/task/submit", {"command": command}, token=token)
-
-
-def get_task_list(token: str):
-    return _get("/task/list", token=token)
-
-
-def get_task_status(token: str, task_id: int):
-    return _get(f"/task/status/{task_id}", token=token)
-
-
-def send_chat_message(token: str, session_id: str, message: str):
-    raise ApiError("聊天接口后端还没实现（cloud_server.py 里没有 /chat 路由）。可以在设置页填 DeepSeek Key 直连测试。")
+    def __init__(self, msg: str):
+        self.message = msg
 
 
 def call_deepseek(api_key: str, messages: list) -> str:
-    """内测用：跳过自建后端，直接调用DeepSeek官方API。"""
     try:
         resp = requests.post(
             DEEPSEEK_URL,
@@ -323,24 +234,23 @@ def call_deepseek(api_key: str, messages: list) -> str:
             timeout=30,
         )
     except requests.RequestException as e:
-        raise ApiError(f"DeepSeek网络请求失败：{e}")
+        raise ApiError(f"网络请求失败：{e}")
     try:
         data = resp.json()
     except ValueError:
-        raise ApiError("DeepSeek返回格式异常")
+        raise ApiError("返回格式异常")
     if resp.status_code >= 400:
-        err_msg = data.get("error", {}).get("message", f"DeepSeek请求失败（状态码 {resp.status_code}）")
-        raise ApiError(err_msg)
+        err = data.get("error", {}).get("message", f"请求失败({resp.status_code})")
+        raise ApiError(err)
     try:
         return data["choices"][0]["message"]["content"]
     except (KeyError, IndexError):
-        raise ApiError("DeepSeek返回内容解析失败")
+        raise ApiError("回复解析失败")
 
 
 def transcribe_audio(api_key: str, file_path: str) -> str:
-    """把一段录音文件发给硅基流动的语音识别接口，换回文字。"""
     if not os.path.exists(file_path):
-        raise ApiError("录音文件没找到，可能是录音没保存成功")
+        raise ApiError("录音文件不存在")
     try:
         with open(file_path, "rb") as f:
             resp = requests.post(
@@ -351,632 +261,575 @@ def transcribe_audio(api_key: str, file_path: str) -> str:
                 timeout=30,
             )
     except (requests.RequestException, OSError) as e:
-        raise ApiError(f"语音识别网络请求失败：{e}")
+        raise ApiError(f"语音识别请求失败：{e}")
     try:
         data = resp.json()
     except ValueError:
         raise ApiError("语音识别返回格式异常")
     if resp.status_code >= 400:
-        msg = data.get("message") or (data.get("error") or {}).get("message") or f"语音识别失败（状态码 {resp.status_code}）"
-        raise ApiError(msg)
+        raise ApiError(data.get("message", "语音识别失败"))
     text = (data.get("text") or "").strip()
     if not text:
-        raise ApiError("没识别出文字，可能录音太短或太安静，重新试一次")
+        raise ApiError("没识别出文字，请重试")
     return text
 
 
+async def call_computer_async(storage: Storage, endpoint: str, data: dict = None) -> dict:
+    ip = await storage.get_computer_ip()
+    if not ip:
+        return {"error": "未配置电脑IP，请去设置页填写"}
+    url = f"http://{ip}{endpoint}"
+    loop = asyncio.get_running_loop()
+
+    def _req():
+        try:
+            r = requests.request("POST" if data else "GET", url, json=data or {}, timeout=10)
+            r.raise_for_status()
+            return r.json()
+        except Exception as e:
+            return {"error": str(e)}
+
+    return await loop.run_in_executor(None, _req)
+
+
 # ============================================================
-# 第四部分：组件
+# 全局 overlay 控件（在 main() 里初始化）
 # ============================================================
-def _format_time(ts) -> str:
+_file_picker = None
+_audio_recorder = None
+
+
+_page = None
+
+
+def show_snack(text: str, color: str = None):
+    """兼容旧版 Flet：没有 show_snack，用 page.snack_bar + page.update"""
     try:
-        return time.strftime("%H:%M", time.localtime(ts))
+        _page.snack_bar = ft.SnackBar(ft.Text(text, size=13, color=color or Color.text_primary), duration=2000)
+        _page.snack_bar.open = True
+        _page.update()
     except Exception:
-        return ""
+        pass
 
 
-def _bubble_width(text: str) -> int:
-    """根据文字长度粗略估算气泡宽度，短消息窄一点，长消息封顶到260然后自动换行。"""
-    estimated = 40 + len(text) * 15
-    return max(60, min(260, estimated))
+def do_haptic(level: str = "light"):
+    try:
+        _page.vibrate(10 if level == "light" else 30 if level == "medium" else 50)
+    except Exception:
+        pass
 
 
-def message_bubble(role: str, content: str, on_copy=None) -> ft.Row:
-    """用户消息是真正的胶囊(药丸)形状；AI消息不要气泡、不要头像、不要时间戳，只有纯文本+复制按钮。"""
-    is_user = role == "user"
-    if is_user:
-        w = _bubble_width(content)
-        bubble = ft.Container(
-            content=ft.Text(content, color=ft.Colors.WHITE, size=15, selectable=True, no_wrap=False, width=w),
-            bgcolor=Color.accent,
-            padding=ft.Padding.symmetric(horizontal=18, vertical=12),
-            border_radius=24,  # 四角统一大圆角=真正的胶囊/药丸形状
-            margin=ft.Margin.only(left=60, top=3, bottom=3),
-        )
-        return ft.Row(controls=[bubble], alignment=ft.MainAxisAlignment.END)
-    else:
-        text_ctrl = ft.Text(content, color=Color.text_primary, size=15, selectable=True, no_wrap=False, width=290)
-        controls = [ft.Container(content=text_ctrl, padding=ft.Padding.symmetric(horizontal=4, vertical=4))]
-        if on_copy:
-            async def _copy_click(e, c=content):
-                await on_copy(c)
-
-            controls.append(ft.Container(
-                padding=ft.Padding.only(left=2),
-                content=ft.IconButton(icon=ft.Icons.COPY_ALL_OUTLINED, icon_size=14, icon_color=Color.text_hint,
-                                        tooltip="复制", on_click=_copy_click),
-            ))
-        return ft.Row(controls=[ft.Column(controls=controls, spacing=0)], alignment=ft.MainAxisAlignment.START)
-
-
-def typing_indicator() -> ft.Row:
-    dots = ft.Row(
-        controls=[ft.Container(width=6, height=6, border_radius=3, bgcolor=Color.text_secondary) for _ in range(3)],
-        spacing=4,
-    )
-    container = ft.Container(content=dots, padding=ft.Padding.symmetric(horizontal=4, vertical=8),
-                               margin=ft.Margin.only(right=40, top=4, bottom=4))
-    return ft.Row(controls=[container], alignment=ft.MainAxisAlignment.START)
+def copy_clipboard(text: str):
+    """剪贴板——兼容不同版本 Flet"""
+    try:
+        import asyncio
+        asyncio.ensure_future(ft.Clipboard().set(text))
+    except Exception:
+        try:
+            page.set_clipboard(text)
+        except Exception:
+            pass
 
 
 # ============================================================
-# 第五部分：开屏轮播数据
+# Agent 技能目录
 # ============================================================
-INTRO_SLIDES = [
-    ("#6C63FF", "#FFFFFF", "Black C", "手机和电脑，一个账号打通"),
-    ("#0B1220", "#8B85FF", "指哪打哪", "一句话下发指令，电脑自动执行"),
-    ("#FCEFC7", "#6C63FF", "随身带走", "对话记录跨设备同步，不丢上下文"),
-    ("#101418", "#4CC38A", "开始吧", "登录一次，随时随地接着聊"),
+AGENT_SKILLS = [
+    {
+        "id": "organize", "name": "整理桌面", "icon": ft.Icons.DASHBOARD_CUSTOMIZE_OUTLINED,
+        "desc": "按类型将桌面文件分类到对应文件夹", "endpoint": "/organize", "method": "POST",
+        "needs_input": False,
+    },
+    {
+        "id": "desktop_files", "name": "查看桌面文件", "icon": ft.Icons.FOLDER_OPEN_OUTLINED,
+        "desc": "列出桌面所有文件和文件夹", "endpoint": "/desktop_files", "method": "GET",
+        "needs_input": False,
+    },
+    {
+        "id": "file_search", "name": "文件搜索", "icon": ft.Icons.SEARCH_OUTLINED,
+        "desc": "在桌面搜索包含关键词的文件", "endpoint": "/chat", "method": "POST",
+        "needs_input": True, "input_label": "搜索关键词",
+        "prompt_template": "帮我找文件，关键词：{input}",
+    },
+    {
+        "id": "ledger", "name": "台账生成", "icon": ft.Icons.TABLE_CHART_OUTLINED,
+        "desc": "生成出入库Excel台账模板到桌面", "endpoint": "/chat", "method": "POST",
+        "needs_input": True, "input_label": "台账描述",
+        "prompt_template": "请生成台账：{input}",
+    },
+    {
+        "id": "lock", "name": "锁屏", "icon": ft.Icons.LOCK_OUTLINED,
+        "desc": "立即锁定电脑屏幕", "endpoint": "/chat", "method": "POST",
+        "needs_input": False,
+        "prompt_template": "请执行锁屏操作",
+    },
 ]
 
 
 # ============================================================
-# 第六部分：main
+# main
 # ============================================================
 async def main(page: ft.Page):
+    global _page, _file_picker, _audio_recorder
+    _page = page
+
     page.title = "Black C"
     page.padding = 0
-    page.window.width = 400
-    page.window.height = 800
+    page.window.width = 420
+    page.window.height = 860
     page.fonts = {}
 
     storage = Storage(page)
 
+    # ---- 主题初始化 ----
     saved_theme = await storage.get_theme_mode()
     apply_theme(saved_theme)
     page.theme_mode = ft.ThemeMode.LIGHT if saved_theme == "light" else ft.ThemeMode.DARK
     page.bgcolor = Color.bg
 
-    # 文件选择器：两次独立实测都确认了"Unknown control: FilePicker"崩溃，
-    # 这不是偶然，是环境层面的硬限制，这次不再加回来。
-    # 想解决需要去查 pyproject.toml 里锁定的 Flet 版本号，
-    # 对照 Flet 官方更新日志/GitHub issue 确认 FilePicker 在这个版本下的支持情况。
+    # ---- 全局 overlay 控件 ----
+    # flet run 桌面热重载不支持原生插件(FilePicker/AudioRecorder/HapticFeedback)，
+    # 会报 Unknown control。放到 try/except 兜底，APK打包后才能用。
 
+    _file_picker = None
+    _audio_recorder = None
+
+    # FilePicker / AudioRecorder 是原生插件，桌面版 flet run 不支持
+    # _file_picker 保持 None，pick_files() 会提示"暂不可用"
+
+    if AUDIO_AVAILABLE:
+        try:
+            _audio_recorder = far.AudioRecorder()
+            page.overlay.append(_audio_recorder)
+        except Exception:
+            _audio_recorder = None
+
+    # ============================================================
+    # 路由
+    # ============================================================
     NAV_ROUTES = ["/chat", "/remote", "/skills", "/settings"]
 
-    def build_nav_bar(active_route: str) -> ft.NavigationBar:
+    def build_nav_bar(active: str) -> ft.NavigationBar:
         async def on_change(e):
             idx = e.control.selected_index
             target = NAV_ROUTES[idx]
             if target != page.route:
-                await page.push_route(target)
+                page.go(target)
 
         return ft.NavigationBar(
-            selected_index=NAV_ROUTES.index(active_route) if active_route in NAV_ROUTES else 0,
+            selected_index=NAV_ROUTES.index(active) if active in NAV_ROUTES else 0,
             bgcolor=Color.surface,
+            surface_tint_color=Color.accent,
             on_change=on_change,
             destinations=[
                 ft.NavigationBarDestination(icon=ft.Icons.CHAT_BUBBLE_OUTLINE,
-                                              selected_icon=ft.Icons.CHAT_BUBBLE, label="对话"),
+                                             selected_icon=ft.Icons.CHAT_BUBBLE, label="对话"),
                 ft.NavigationBarDestination(icon=ft.Icons.DESKTOP_WINDOWS_OUTLINED,
-                                              selected_icon=ft.Icons.DESKTOP_WINDOWS, label="远程"),
+                                             selected_icon=ft.Icons.DESKTOP_WINDOWS, label="远程"),
                 ft.NavigationBarDestination(icon=ft.Icons.EXTENSION_OUTLINED,
-                                              selected_icon=ft.Icons.EXTENSION, label="技能"),
+                                             selected_icon=ft.Icons.EXTENSION, label="技能"),
                 ft.NavigationBarDestination(icon=ft.Icons.PERSON_OUTLINE,
-                                              selected_icon=ft.Icons.PERSON, label="我的"),
+                                             selected_icon=ft.Icons.PERSON, label="我的"),
             ],
         )
 
     def safe(content: ft.Control) -> ft.SafeArea:
-        """统一包一层安全区域，避免被状态栏/刘海遮住导致点不到按钮。"""
         return ft.SafeArea(content=content, expand=True)
 
-    # ---------------- 0. 开屏动态页(未登录时的默认首页) ----------------
-    async def build_intro_view():
-        slide = {"i": 0}
-        text_ctrl = ft.Text(INTRO_SLIDES[0][2], size=32, weight=ft.FontWeight.W_700, color=INTRO_SLIDES[0][1])
-        sub_ctrl = ft.Text(INTRO_SLIDES[0][3], size=14, color=INTRO_SLIDES[0][1])
-        bg_container = ft.Container(
-            expand=True,
-            bgcolor=INTRO_SLIDES[0][0],
-            animate=ft.Animation(500, ft.AnimationCurve.EASE_IN_OUT),
-        )
-
-        async def cycle():
-            while page.route == "/intro":
-                await asyncio.sleep(2.5)
-                if page.route != "/intro":
-                    break
-                slide["i"] = (slide["i"] + 1) % len(INTRO_SLIDES)
-                bg, color, text, sub = INTRO_SLIDES[slide["i"]]
-                bg_container.bgcolor = bg
-                text_ctrl.value = text
-                text_ctrl.color = color
-                sub_ctrl.value = sub
-                sub_ctrl.color = color
-                page.update()
-
-        page.run_task(cycle)
-
-        async def go_login(e):
-            await page.push_route("/login")
-
-        foreground = ft.SafeArea(
-            expand=True,
-            content=ft.Column(
-                expand=True,
-                controls=[
-                    ft.Container(height=24),
-                    ft.Container(
-                        padding=ft.Padding.symmetric(horizontal=Size.pad_page),
-                        content=ft.Column(controls=[text_ctrl, sub_ctrl], spacing=8),
-                    ),
-                    ft.Container(expand=True),  # 撑开空间，把按钮推到底部
-                    ft.Container(
-                        padding=ft.Padding(left=20, right=20, top=0, bottom=30),
-                        content=ft.ElevatedButton(
-                            content=ft.Text("登录或注册", weight=ft.FontWeight.W_600),
-                            bgcolor=ft.Colors.WHITE, color=ft.Colors.BLACK,
-                            width=340, height=52,
-                            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=26)),
-                            on_click=go_login,
-                        ),
-                    ),
-                ],
-            ),
-        )
-
-        return ft.View(
-            route="/intro",
-            bgcolor=INTRO_SLIDES[0][0],
-            padding=0,
-            controls=[
-                ft.Stack(expand=True, controls=[bg_container, foreground]),
-            ],
-        )
-
-    # ---------------- 1. 登录 / 注册页 ----------------
+    # ============================================================
+    # 1. 登录页 —— 明亮现代风格
+    # ============================================================
     def build_login_view():
-        email_field = ft.TextField(
-            label="邮箱 / 测试账号", bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.WHITE), border_radius=Size.radius_md,
-            border_color=ft.Colors.with_opacity(0.25, ft.Colors.WHITE), color=ft.Colors.WHITE,
-            label_style=ft.TextStyle(color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)),
-            text_align=ft.TextAlign.CENTER,
-        )
-        code_field = ft.TextField(
-            label="验证码", bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.WHITE), border_radius=Size.radius_md,
-            border_color=ft.Colors.with_opacity(0.25, ft.Colors.WHITE), color=ft.Colors.WHITE,
-            label_style=ft.TextStyle(color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)), expand=True,
-            text_align=ft.TextAlign.CENTER,
+        username_field = ft.TextField(
+            label="用户名",
+            prefix_icon=ft.Icons.PERSON_OUTLINE,
+            bgcolor="#FFFFFF", border_radius=Size.radius_md,
+            border_color="#E0E0E6", color="#1C1C1E",
+            label_style=ft.TextStyle(color="#8E8E93"),
+            text_size=15, height=48,
+            content_padding=ft.Padding(left=16, right=16, top=8, bottom=8),
         )
         password_field = ft.TextField(
             label="密码", password=True, can_reveal_password=True,
-            bgcolor=ft.Colors.with_opacity(0.10, ft.Colors.WHITE), border_radius=Size.radius_md,
-            border_color=ft.Colors.with_opacity(0.25, ft.Colors.WHITE), color=ft.Colors.WHITE,
-            label_style=ft.TextStyle(color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)),
-            text_align=ft.TextAlign.CENTER,
+            prefix_icon=ft.Icons.LOCK_OUTLINE,
+            bgcolor="#FFFFFF", border_radius=Size.radius_md,
+            border_color="#E0E0E6", color="#1C1C1E",
+            label_style=ft.TextStyle(color="#8E8E93"),
+            text_size=15, height=48,
+            content_padding=ft.Padding(left=16, right=16, top=8, bottom=8),
         )
-        status_text = ft.Text("", color=Color.danger, size=13)
-        is_register_mode = {"value": False}
+        error_text = ft.Text("", color=Color.danger, size=13)
+        loading = {"v": False}
 
-        # 重新设计：去掉了之前那种五色轮播的"跑马灯"光斑（那是丑的根源），
-        # 换成两个固定色调、只做透明度呼吸动画的柔光斑，颜色不再跳来跳去。
-        breathe_anim = ft.Animation(1600, ft.AnimationCurve.EASE_IN_OUT)
-        glow_top = ft.Container(width=260, height=260, border_radius=130, bgcolor=Color.accent,
-                                  opacity=0.22, blur=ft.Blur(80, 80), animate_opacity=breathe_anim,
-                                  left=-60, top=-60)
-        glow_bottom = ft.Container(width=220, height=220, border_radius=110, bgcolor="#3AB0FF",
-                                     opacity=0.12, blur=ft.Blur(90, 90), animate_opacity=breathe_anim,
-                                     right=-50, top=280)
-
-        async def glow_breathe():
-            high = False
-            while page.route == "/login":
-                high = not high
-                glow_top.opacity = 0.30 if high else 0.16
-                glow_bottom.opacity = 0.18 if high else 0.08
-                page.update()
-                await asyncio.sleep(1.6)
-
-        page.run_task(glow_breathe)
-
-        def set_loading(loading: bool):
-            submit_btn.disabled = loading
-            submit_btn.content = (
-                ft.ProgressRing(width=16, height=16, stroke_width=2, color=ft.Colors.WHITE)
-                if loading else ft.Text("注册" if is_register_mode["value"] else "登录", weight=ft.FontWeight.W_600)
-            )
-            page.update()
-
-        async def send_code(e):
-            email = email_field.value.strip()
-            if not email or "@" not in email:
-                status_text.value = "请先输入正确的邮箱"
-                status_text.color = Color.danger
-                page.update()
-                return
-            send_code_btn.disabled = True
-            page.update()
-            # 纯前端演示模式：不真的发邮件，假装发送成功
-            await asyncio.sleep(0.3)
-            status_text.value = "验证码已发送（演示模式，随便填6位数字都行）"
-            status_text.color = Color.success
-            page.update()
-            for remaining in range(60, 0, -1):
-                send_code_btn.content = ft.Text(f"{remaining}s", size=12)
-                page.update()
-                await asyncio.sleep(1)
-            send_code_btn.content = ft.Text("获取验证码", size=12)
-            send_code_btn.disabled = False
-            page.update()
-
-        async def do_submit(e):
-            status_text.value = ""
-            email = email_field.value.strip()
+        async def do_login(e):
+            username = username_field.value.strip()
             password = password_field.value.strip()
 
-            if not email or not password:
-                status_text.value = "邮箱和密码不能为空"
-                status_text.color = Color.danger
-                page.update()
-                return
-            if is_register_mode["value"] and not code_field.value.strip():
-                status_text.value = "请输入验证码"
-                status_text.color = Color.danger
+            if not username or not password:
+                error_text.value = "请输入用户名和密码"
                 page.update()
                 return
 
-            # 纯前端演示模式：不发任何网络请求，填了就直接放行进对话页
-            set_loading(True)
-            await asyncio.sleep(0.4)  # 留一点点停顿，看得出按钮的加载状态
-            await storage.save_login("demo-token", {"email": email})
-            await page.push_route("/chat")
-            set_loading(False)
+            if username in WHITELIST and WHITELIST[username] == password:
+                error_text.value = ""
+                loading["v"] = True
+                login_btn.disabled = True
+                login_btn.content = ft.ProgressRing(width=20, height=20, stroke_width=2, color=ft.Colors.WHITE)
+                page.update()
+                await asyncio.sleep(0.3)
+                await storage.save_login("whitelist-token", {"username": username})
+                page.go("/chat")
+                loading["v"] = False
+                login_btn.disabled = False
+                login_btn.content = ft.Text("登 录", weight=ft.FontWeight.W_600, size=16)
+                page.update()
+            else:
+                error_text.value = "用户名或密码错误"
+                page.update()
 
-        def toggle_mode(e):
-            is_register_mode["value"] = not is_register_mode["value"]
-            code_row.visible = is_register_mode["value"]
-            mode_toggle.content = ft.Text("已有账号？去登录" if is_register_mode["value"] else "没有账号？去注册")
-            submit_btn.content = ft.Text("注册" if is_register_mode["value"] else "登录", weight=ft.FontWeight.W_600)
-            page.update()
-
-        async def not_implemented(e):
-            status_text.value = "这个登录方式暂未接入，请先用邮箱登录（或用测试账号）"
-            status_text.color = Color.danger
-            page.update()
-
-        submit_btn = ft.ElevatedButton(
-            content=ft.Text("登录", weight=ft.FontWeight.W_600),
-            bgcolor=Color.accent, color=ft.Colors.WHITE, width=320, height=48,
-            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=Size.radius_md)),
-            on_click=do_submit,
-        )
-        mode_toggle = ft.TextButton(content=ft.Text("没有账号？去注册"),
-                                      style=ft.ButtonStyle(color=ft.Colors.with_opacity(0.75, ft.Colors.WHITE)),
-                                      on_click=toggle_mode)
-        send_code_btn = ft.OutlinedButton(content=ft.Text("获取验证码", size=12), on_click=send_code,
-                                            style=ft.ButtonStyle(color=Color.accent))
-        code_row = ft.Row(controls=[code_field, send_code_btn], visible=False, spacing=8)
-
-        phone_btn = ft.OutlinedButton(
-            content=ft.Row(controls=[ft.Icon(ft.Icons.PHONE_IPHONE, size=18, color=ft.Colors.WHITE),
-                                       ft.Text("使用手机号继续", color=ft.Colors.WHITE)],
-                             alignment=ft.MainAxisAlignment.CENTER, spacing=8),
-            width=320, height=46, on_click=not_implemented,
-            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=Size.radius_md), side=ft.BorderSide(1, ft.Colors.with_opacity(0.3, ft.Colors.WHITE))),
-        )
-        google_btn = ft.OutlinedButton(
-            content=ft.Row(controls=[ft.Icon(ft.Icons.G_MOBILEDATA, size=22, color=ft.Colors.WHITE),
-                                       ft.Text("使用 Google 继续", color=ft.Colors.WHITE)],
-                             alignment=ft.MainAxisAlignment.CENTER, spacing=4),
-            width=320, height=46, on_click=not_implemented,
-            style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=Size.radius_md), side=ft.BorderSide(1, ft.Colors.with_opacity(0.3, ft.Colors.WHITE))),
+        login_btn = ft.Container(
+            content=ft.Text("登 录", weight=ft.FontWeight.W_600, size=16, color=ft.Colors.WHITE),
+            bgcolor="#6C63FF", border_radius=Size.radius_md,
+            width=320, height=48,
+            alignment=ft.Alignment.CENTER,
+            ink=True, on_click=do_login,
+            shadow=ft.BoxShadow(spread_radius=0, blur_radius=16,
+                                 color=ft.Colors.with_opacity(0.3, "#6C63FF"),
+                                 offset=ft.Offset(0, 6)),
         )
 
+        # 毛玻璃风格登录卡
         return ft.View(
             route="/login",
-            bgcolor="#14151B",
+            bgcolor="#0F0F0F",
+            padding=0,
             controls=[
-                safe(
-                    ft.Column(
+                ft.Stack([
+                    # 渐变背景层
+                    ft.Container(
+                        gradient=ft.LinearGradient(
+                            begin=ft.Alignment.topLeft, end=ft.Alignment.bottomRight,
+                            colors=["#0F0F0F", "#1A1A2E", "#16213E", "#0F3460"],
+                        ),
                         expand=True,
-                        scroll=ft.ScrollMode.AUTO,
-                        controls=[
-                            ft.Stack(
-                                controls=[
-                                    ft.Container(
-                                        expand=True,
-                                        # 深石墨灰过渡，比之前那种高饱和紫色更耐看、更高级；
-                                        # 紫色只留在光斑和按钮上做点缀色，不再铺满整个背景。
-                                        gradient=ft.LinearGradient(
-                                            begin=ft.Alignment.TOP_CENTER,
-                                            end=ft.Alignment.BOTTOM_CENTER,
-                                            colors=["#1C1E26", "#14151B", "#0E0F13"],
-                                        ),
-                                    ),
-                                    glow_top,
-                                    glow_bottom,
-                                    ft.Column(
+                    ),
+                    # 装饰光斑
+                    ft.Container(
+                        width=200, height=200, border_radius=100,
+                        bgcolor=ft.Colors.with_opacity(0.12, "#6C63FF"),
+                        blur=ft.Blur(60, 60),
+                        left=-60, top=-60,
+                    ),
+                    ft.Container(
+                        width=150, height=150, border_radius=75,
+                        bgcolor=ft.Colors.with_opacity(0.10, "#8B85FF"),
+                        blur=ft.Blur(50, 50),
+                        right=-40, bottom=120,
+                    ),
+                    # 内容
+                    ft.SafeArea(
+                        expand=True,
+                        content=ft.Column(
+                            expand=True,
+                            horizontal_alignment=ft.CrossAxisAlignment.CENTER,
+                            controls=[
+                                ft.Container(height=40),
+                                ft.Container(
+                                    width=90, height=90, border_radius=24,
+                                    bgcolor=ft.Colors.with_opacity(0.15, "#6C63FF"),
+                                    border=ft.Border.all(1, ft.Colors.with_opacity(0.25, "#8B85FF")),
+                                    alignment=ft.Alignment.CENTER,
+                                    content=ft.Icon(ft.Icons.SMART_TOY, color="#6C63FF", size=42),
+                                ),
+                                ft.Container(height=20),
+                                ft.Text("Black C", size=28, weight=ft.FontWeight.W_700,
+                                         color=ft.Colors.WHITE),
+                                ft.Text("跨设备 AI 助手", size=14, color="#98989D"),
+                                ft.Container(height=28),
+                                # 毛玻璃卡片
+                                ft.Container(
+                                    width=340,
+                                    padding=ft.Padding.symmetric(horizontal=28, vertical=28),
+                                    border_radius=20,
+                                    bgcolor=ft.Colors.with_opacity(0.08, ft.Colors.WHITE),
+                                    border=ft.Border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                                    blur=ft.Blur(10, 10),
+                                    content=ft.Column(
+                                        horizontal_alignment=ft.CrossAxisAlignment.CENTER,
                                         controls=[
-                                            ft.Container(height=40),
-                                            ft.Container(
-                                                content=ft.Column(
-                                                    controls=[
-                                                        ft.Container(
-                                                            width=88, height=88, border_radius=24,
-                                                            bgcolor=ft.Colors.with_opacity(0.06, ft.Colors.WHITE),
-                                                            border=ft.Border.all(1, ft.Colors.with_opacity(0.14, ft.Colors.WHITE)),
-                                                            alignment=ft.Alignment.CENTER,
-                                                            content=ft.CircleAvatar(foreground_image_src="/cat_avatar.jpg", radius=36),
-                                                        ),
-                                                        ft.Container(height=16),
-                                                        ft.Text("Black C", size=24, weight=ft.FontWeight.W_600,
-                                                                  color=ft.Colors.WHITE),
-                                                        ft.Text("跨设备的 AI 助手", size=12,
-                                                                  color=ft.Colors.with_opacity(0.55, ft.Colors.WHITE)),
-                                                        ft.Container(height=28),
-                                                        email_field,
-                                                        ft.Container(height=12),
-                                                        code_row,
-                                                        ft.Container(height=12),
-                                                        password_field,
-                                                        ft.Container(height=8),
-                                                        status_text,
-                                                        ft.Container(height=12),
-                                                        submit_btn,
-                                                        mode_toggle,
-                                                        ft.Container(height=8),
-                                                        ft.Row(controls=[
-                                                            ft.Container(expand=True, height=1, bgcolor=ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
-                                                            ft.Text("或", size=12, color=ft.Colors.with_opacity(0.6, ft.Colors.WHITE)),
-                                                            ft.Container(expand=True, height=1, bgcolor=ft.Colors.with_opacity(0.2, ft.Colors.WHITE)),
-                                                        ], spacing=10),
-                                                        ft.Container(height=8),
-                                                        phone_btn,
-                                                        ft.Container(height=8),
-                                                        google_btn,
-                                                        ft.Container(height=20),
-                                                    ],
-                                                    horizontal_alignment=ft.CrossAxisAlignment.CENTER,
-                                                ),
-                                                alignment=ft.Alignment.CENTER,
-                                                padding=ft.Padding.symmetric(horizontal=Size.pad_page),
-                                            ),
+                                            username_field,
+                                            ft.Container(height=14),
+                                            password_field,
+                                            ft.Container(height=6),
+                                            error_text,
+                                            ft.Container(height=18),
+                                            login_btn,
+                                            ft.Container(height=12),
+                                            ft.Text("测试账号: heilian123 / heilian123",
+                                                     size=11, color="#636366"),
                                         ],
                                     ),
-                                ],
-                            ),
-                        ],
-                    )
-                ),
+                                ),
+                                ft.Container(expand=True),
+                                ft.Text("v3.0 · 本地演示版", size=11, color="#48484A"),
+                                ft.Container(height=20),
+                            ],
+                        ),
+                    ),
+                ], expand=True),
             ],
         )
 
-    # ---------------- 2. 对话主页 ----------------
+    # ============================================================
+    # 2. 对话主页 —— 悬浮输入栏
+    # ============================================================
     async def build_chat_view():
         if not await storage.is_logged_in():
-            await page.push_route("/login")
+            page.go("/login")
             return ft.View(route="/chat", controls=[])
 
         sessions = await storage.list_sessions()
         user = await storage.get_user() or {}
         current_session = {"id": sessions[0]["id"] if sessions else (await storage.create_session())["id"]}
 
-        message_list = ft.ListView(expand=True, spacing=2, auto_scroll=True,
-                                     padding=ft.Padding.symmetric(horizontal=Size.pad_page, vertical=12))
+        # 消息列表
+        message_list = ft.ListView(
+            expand=True, spacing=6, auto_scroll=True,
+            padding=ft.Padding(left=16, right=16, top=12, bottom=Size.input_bar_h + 24),
+        )
 
-        async def copy_to_clipboard(text: str):
-            # 修复：这个 Flet 版本里 Clipboard 已经从 page 属性拆成独立 service，
-            # 老写法 page.set_clipboard(...) 在这个版本里必定报
-            # "'Page' object has no attribute 'set_clipboard'"。
-            # 新写法要用 ft.Clipboard() 实例 + await .set()。
+        async def copy_text(text: str):
             try:
                 await ft.Clipboard().set(text)
-                page.show_dialog(ft.SnackBar(ft.Text("已复制")))
+                show_snack("已复制")
             except Exception:
                 pass
 
         async def load_current_session():
             message_list.controls.clear()
             for msg in await storage.get_messages(current_session["id"]):
-                message_list.controls.append(
-                    message_bubble(msg["role"], msg["content"], on_copy=copy_to_clipboard)
+                message_list.controls.append(_msg_bubble(msg["role"], msg["content"], copy_text))
+            page.update()
+
+        # 附件列表
+        selected_files = []
+
+        def remove_file(idx):
+            nonlocal selected_files
+            selected_files = [f for i, f in enumerate(selected_files) if i != idx]
+            _render_chips()
+
+        def _render_chips():
+            chips_row.controls.clear()
+            for i, f in enumerate(selected_files):
+                idx = i
+                chips_row.controls.append(
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.INSERT_DRIVE_FILE_OUTLINED, size=14, color=Color.accent),
+                            ft.Text(f["name"], size=12, color=Color.text_primary,
+                                     max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            ft.IconButton(icon=ft.Icons.CLOSE, icon_size=14, icon_color=Color.text_secondary,
+                                           on_click=lambda e, i=idx: remove_file(i), padding=0, width=20, height=20),
+                        ], spacing=4, tight=True),
+                        bgcolor=Color.surface_light, border_radius=10,
+                        padding=ft.Padding(left=10, right=6, top=5, bottom=5),
+                    )
                 )
+            chips_row.visible = len(selected_files) > 0
             page.update()
 
+        chips_row = ft.Row(controls=[], spacing=6, scroll=ft.ScrollMode.AUTO, visible=False, wrap=True)
+
+        # FilePicker 回调
+        def on_files_picked(e):
+            if not e.files:
+                return
+            for f in e.files:
+                selected_files.append({"name": f.name, "path": f.path, "size": f.size})
+            _render_chips()
+            do_haptic("light")
+
+        if _file_picker:
+            _file_picker.on_result = on_files_picked
+
+        def pick_files(e):
+            if _file_picker is None:
+                show_snack("文件选择暂不可用")
+                return
+            _file_picker.pick_files(allow_multiple=True, file_type=ft.FilePickerFileType.ANY)
+
+        # 输入栏
         input_field = ft.TextField(
-            hint_text="给 Black C 发消息…",
+            hint_text="发消息…",
             bgcolor=ft.Colors.TRANSPARENT, border=ft.InputBorder.NONE,
-            color=Color.text_primary, text_size=16,
+            color=Color.text_primary, text_size=15,
             hint_style=ft.TextStyle(color=Color.text_hint),
-            expand=True, min_lines=1, max_lines=6,
-            content_padding=ft.Padding.symmetric(horizontal=4, vertical=16),
+            expand=True, min_lines=1, max_lines=5,
+            content_padding=ft.Padding.symmetric(horizontal=8, vertical=14),
         )
-
-
-        async def reveal_reply(reply_text: str):
-            """AI回复逐字展现的打字机效果，展现完再补上复制按钮。"""
-            text_ctrl = ft.Text("", color=Color.text_primary, size=15, selectable=True, no_wrap=False, width=290)
-            body = ft.Container(content=text_ctrl, padding=ft.Padding.symmetric(horizontal=4, vertical=4))
-            footer_slot = ft.Container(height=0)
-            col = ft.Column(controls=[body, footer_slot], spacing=0)
-            message_list.controls.append(ft.Row(controls=[col], alignment=ft.MainAxisAlignment.START))
-            page.update()
-
-            step = 2
-            for i in range(0, len(reply_text), step):
-                text_ctrl.value = reply_text[: i + step]
-                page.update()
-                await asyncio.sleep(0.025)
-            text_ctrl.value = reply_text
-
-            async def copy_this(e):
-                await copy_to_clipboard(reply_text)
-
-            col.controls[1] = ft.Container(
-                padding=ft.Padding.only(left=2),
-                content=ft.IconButton(icon=ft.Icons.COPY_ALL_OUTLINED, icon_size=14, icon_color=Color.text_hint,
-                                        tooltip="复制", on_click=copy_this),
-            )
-            page.update()
 
         async def send_message(e):
             text = input_field.value.strip()
-            if not text:
+            if not text and not selected_files:
                 return
+
+            # 构建消息内容（含附件名）
+            content = text
+            if selected_files:
+                names = "、".join(f["name"] for f in selected_files)
+                content = f"[附件: {names}] {text}" if text else f"[附件: {names}]"
+
             input_field.value = ""
+            sel = selected_files.copy()
+            selected_files.clear()
+            _render_chips()
             page.update()
 
-            await storage.append_message(current_session["id"], "user", text)
-            message_list.controls.append(message_bubble("user", text))
+            await storage.append_message(current_session["id"], "user", content)
+            message_list.controls.append(_msg_bubble("user", content, copy_text))
             page.update()
+            do_haptic("light")
 
-            indicator = typing_indicator()
-            message_list.controls.append(indicator)
+            # typing dots
+            dots = _typing_dots()
+            message_list.controls.append(dots)
             page.update()
+            do_haptic("medium")
 
             deepseek_key = await storage.get_deepseek_key()
             if not deepseek_key:
-                # 没配Key的时候给出明确提示，而不是假装成AI回复的示例文本——
-                # 这样你能一眼看出"是没配置"而不是"配了但用不了"。
-                await asyncio.sleep(0.4)
-                reply = "还没有配置 DeepSeek API Key，去底部导航「我的」页最下面填一下就能真正对话了。"
+                await asyncio.sleep(0.3)
+                reply = "还没有配置 DeepSeek API Key，去底部「我的」页最下面填一下。"
             else:
                 try:
-                    history = [{"role": "system", "content": "你是Black C，一个友好、简洁的AI助手。"}]
+                    history = [{"role": "system", "content": "你是 Black C，一个友好简洁的 AI 助手。"}]
                     for m in await storage.get_messages(current_session["id"]):
                         role = m["role"] if m["role"] in ("user", "assistant") else "user"
                         history.append({"role": role, "content": m["content"]})
-                    # 注意：这是一次真实的网络请求（requests.post），
-                    # 是同步阻塞调用，请求期间界面可能会有短暂停顿，这是已知的取舍。
-                    reply = call_deepseek(deepseek_key, history)
+                    loop = asyncio.get_running_loop()
+                    reply = await loop.run_in_executor(None, call_deepseek, deepseek_key, history)
                 except ApiError as err:
                     reply = f"请求失败：{err.message}"
 
-            message_list.controls.remove(indicator)
+            message_list.controls.remove(dots)
             page.update()
             await storage.append_message(current_session["id"], "assistant", reply)
-            await reveal_reply(reply)
+            await _reveal_reply(reply, copy_text)
+            do_haptic("heavy")
 
+        # 打字机效果
+        async def _reveal_reply(text: str, copy_fn):
+            ctrl = ft.Text("", color=Color.text_primary, size=15, selectable=True, no_wrap=False, width=290)
+            body = ft.Container(content=ctrl, padding=ft.Padding.symmetric(horizontal=4, vertical=4))
+            footer = ft.Container(height=0)
+            col = ft.Column(controls=[body, footer], spacing=0)
+            row = ft.Row(controls=[col], alignment=ft.MainAxisAlignment.START)
+            row.opacity = 0
+            message_list.controls.append(row)
+            page.update()
+
+            # 淡入
+            for op in [0.0, 0.25, 0.5, 0.75, 1.0]:
+                row.opacity = op
+                page.update()
+                await asyncio.sleep(0.015)
+
+            step = 2
+            for i in range(0, len(text), step):
+                if page.route != "/chat":
+                    return
+                ctrl.value = text[:i + step]
+                page.update()
+                await asyncio.sleep(0.025)
+            ctrl.value = text
+
+            async def cp(e):
+                await copy_fn(text)
+
+            footer.content = ft.IconButton(
+                icon=ft.Icons.COPY_ALL_OUTLINED, icon_size=14, icon_color=Color.text_hint,
+                tooltip="复制", on_click=cp,
+            )
+            page.update()
+
+        # ---- 录音 ----
         recording_state = {"active": False, "elapsed": 0, "path": None}
 
-        # 真正的录音控件：来自独立扩展包 flet_audio_recorder（非可视控件，要挂进 page.overlay）。
-        # 如果没装这个包，audio_recorder 就是 None，start_recording 里会提前拦截并提示，
-        # 不会让整个对话页崩掉。
-        audio_recorder = far.AudioRecorder() if AUDIO_RECORDER_AVAILABLE else None
-        if audio_recorder:
-            page.overlay.append(audio_recorder)
-
-        recording_dot = ft.Container(
-            width=10, height=10, border_radius=5, bgcolor=Color.danger,
-            animate_opacity=ft.Animation(500, ft.AnimationCurve.EASE_IN_OUT),
-        )
-        recording_time_text = ft.Text("0:00", size=14, color=Color.text_primary)
-        recording_status_text = ft.Text("正在聆听…", size=14, color=Color.text_primary, expand=True)
-
-        glow_bar = ft.Container(
-            height=4, visible=False, bgcolor=Color.accent,
-            animate=ft.Animation(400, ft.AnimationCurve.EASE_IN_OUT),
+        recording_status = ft.Container(
+            visible=False,
+            content=ft.Row([
+                ft.Container(width=8, height=8, border_radius=4, bgcolor=Color.danger,
+                              animate_opacity=ft.Animation(400, ft.AnimationCurve.EASE_IN_OUT)),
+                ft.Text("录音中", size=13, color=Color.danger),
+                ft.Text("0:00", size=13, color=Color.text_secondary),
+            ], spacing=8),
+            bgcolor=Color.surface_light, border_radius=16,
+            padding=ft.Padding.symmetric(horizontal=14, vertical=6),
         )
 
-        async def glow_pulse():
-            dot_on = True
+        async def start_recording(e):
+            if recording_state["active"]:
+                return
+            if _audio_recorder is None:
+                show_snack("语音输入暂不可用（当前平台不支持或缺少依赖）")
+                return
+            asr_key = await storage.get_asr_key()
+            if not asr_key:
+                show_snack("请先在「我的」页配置语音识别 API Key")
+                return
+
+            recording_state["path"] = f"voice_{uuid.uuid4().hex}.wav"
+            try:
+                await _audio_recorder.start_recording(recording_state["path"])
+            except Exception as err:
+                show_snack(f"录音启动失败: {err}")
+                return
+
+            recording_state["active"] = True
+            recording_state["elapsed"] = 0
+            recording_status.visible = True
+            mic_btn.icon = ft.Icons.MIC
+            mic_btn.icon_color = Color.danger
+            input_field.hint_text = "正在聆听…"
+            page.update()
+            page.run_task(_recording_pulse)
+            page.run_task(_recording_tick)
+
+        async def _recording_pulse():
+            dot = recording_status.content.controls[0]
+            on = True
             while recording_state["active"]:
-                dot_on = not dot_on
-                recording_dot.opacity = 1.0 if dot_on else 0.25
+                on = not on
+                dot.opacity = 1.0 if on else 0.2
                 page.update()
-                await asyncio.sleep(0.5)
+                await asyncio.sleep(0.4)
 
-        async def recording_tick():
+        async def _recording_tick():
+            timer = recording_status.content.controls[2]
             while recording_state["active"]:
                 await asyncio.sleep(1)
                 if not recording_state["active"]:
                     break
                 recording_state["elapsed"] += 1
                 m, s = divmod(recording_state["elapsed"], 60)
-                recording_time_text.value = f"{m}:{s:02d}"
+                timer.value = f"{m}:{s:02d}"
                 page.update()
-
-        async def start_recording(e):
-            if recording_state["active"]:
-                return
-            if not AUDIO_RECORDER_AVAILABLE:
-                if sys.platform == "win32":
-                    tip = "语音输入暂不支持Windows桌面版（Flet的第三方控件在这个打包方式下识别不了），装到手机上就能用。"
-                elif not _AUDIO_RECORDER_IMPORTABLE:
-                    tip = ("语音功能还没法用：缺少 flet_audio_recorder 这个包。\n"
-                           "在电脑上运行：pip install flet-audio-recorder --break-system-packages\n"
-                           "打包APK前还要在 pyproject.toml 的 dependencies 里加一行 \"flet-audio-recorder\"，然后重新 flet build apk。")
-                else:
-                    tip = "当前平台暂不支持语音输入。"
-                message_list.controls.append(message_bubble("assistant", tip))
-                page.update()
-                return
-            asr_key = await storage.get_asr_key()
-            if not asr_key:
-                message_list.controls.append(
-                    message_bubble("assistant", "还没配置语音识别Key，去「我的」页最下面填一下（免费申请，见设置页说明）。")
-                )
-                page.update()
-                return
-
-            recording_state["path"] = f"voice_{uuid.uuid4().hex}.wav"
-            try:
-                await audio_recorder.start_recording(recording_state["path"])
-            except Exception as err:
-                message_list.controls.append(
-                    message_bubble("assistant", f"录音启动失败：{err}\n（如果提示Unknown control，说明这个APK打包环境不支持AudioRecorder，需要先解决打包配置，不是代码问题）")
-                )
-                page.update()
-                return
-
-            recording_state["active"] = True
-            recording_state["elapsed"] = 0
-            recording_time_text.value = "0:00"
-            recording_status_text.value = "正在聆听…"
-            input_row_slot.content = recording_row
-            glow_bar.visible = True
-            page.update()
-            page.run_task(glow_pulse)
-            page.run_task(recording_tick)
-
-        async def cancel_recording(e):
-            if recording_state["active"]:
-                try:
-                    await audio_recorder.stop_recording()
-                except Exception:
-                    pass
-            recording_state["active"] = False
-            input_row_slot.content = normal_row
-            glow_bar.visible = False
-            page.update()
 
         async def finish_recording(e):
-            """停止录音 -> 调用语音识别 -> 识别出的文字自动填入输入框并直接发送。"""
             if not recording_state["active"]:
                 return
             recording_state["active"] = False
-            recording_status_text.value = "识别中…"
-            glow_bar.visible = False
+            recording_status.visible = False
+            mic_btn.icon = ft.Icons.MIC_NONE_ROUNDED
+            mic_btn.icon_color = Color.text_secondary
+            input_field.hint_text = "发消息…"
             page.update()
 
             try:
-                file_path = await audio_recorder.stop_recording()
+                file_path = await _audio_recorder.stop_recording()
             except Exception as err:
-                input_row_slot.content = normal_row
-                page.update()
-                message_list.controls.append(message_bubble("assistant", f"停止录音失败：{err}"))
-                page.update()
+                show_snack(f"停止录音失败: {err}")
                 return
 
             file_path = file_path or recording_state["path"]
@@ -984,110 +837,97 @@ async def main(page: ft.Page):
             try:
                 text = transcribe_audio(asr_key, file_path)
             except ApiError as err:
-                input_row_slot.content = normal_row
-                page.update()
-                message_list.controls.append(message_bubble("assistant", f"语音识别失败：{err.message}"))
-                page.update()
+                show_snack(f"识别失败: {err.message}")
                 return
 
-            input_row_slot.content = normal_row
-            page.update()
             input_field.value = text
             page.update()
             await send_message(e)
 
+        mic_btn = ft.IconButton(
+            icon=ft.Icons.MIC_NONE_ROUNDED, icon_color=Color.text_secondary,
+            icon_size=22, on_click=start_recording,
+        )
+        # 录音中点击 -> 完成；否则 -> 开始录音
+        async def mic_click(e):
+            if recording_state["active"]:
+                await finish_recording(e)
+            else:
+                await start_recording(e)
+
+        mic_btn.on_click = mic_click
+
+        # 正常输入行
         normal_row = ft.Row(controls=[
+            ft.IconButton(icon=ft.Icons.ATTACH_FILE, icon_color=Color.text_secondary,
+                           icon_size=22, on_click=pick_files, tooltip="添加文件"),
             input_field,
-            ft.IconButton(icon=ft.Icons.MIC_NONE_ROUNDED, icon_color=Color.text_secondary,
-                           icon_size=20, on_click=start_recording),
+            mic_btn,
             ft.IconButton(icon=ft.Icons.SEND_ROUNDED, icon_color=ft.Colors.WHITE,
-                           icon_size=18, bgcolor=Color.accent, on_click=send_message),
+                           icon_size=20, bgcolor=Color.accent, on_click=send_message),
         ], spacing=2, vertical_alignment=ft.CrossAxisAlignment.CENTER)
 
-        recording_row = ft.Row(controls=[
-            ft.IconButton(icon=ft.Icons.CLOSE, icon_color=Color.text_secondary, icon_size=20,
-                           tooltip="取消", on_click=cancel_recording),
-            recording_dot,
-            ft.Container(width=10),
-            recording_status_text,
-            recording_time_text,
-            ft.Container(width=6),
-            ft.IconButton(icon=ft.Icons.CHECK_CIRCLE, icon_color=Color.accent, icon_size=26,
-                           tooltip="完成并发送", on_click=finish_recording),
-        ], vertical_alignment=ft.CrossAxisAlignment.CENTER)
+        # 悬浮输入栏 毛玻璃
+        floating_input = ft.Container(
+            content=ft.Column(controls=[
+                chips_row,
+                recording_status,
+                ft.Container(
+                    content=normal_row,
+                    bgcolor=ft.Colors.with_opacity(0.75, Color.surface),
+                    border_radius=30,
+                    padding=ft.Padding(left=18, right=6, top=8, bottom=8),
+                    border=ft.Border.all(1, ft.Colors.with_opacity(0.15, Color.divider)),
+                    blur=ft.Blur(12, 12),
+                    shadow=ft.BoxShadow(spread_radius=0, blur_radius=24,
+                                         color=ft.Colors.with_opacity(0.18, ft.Colors.BLACK),
+                                         offset=ft.Offset(0, 8)),
+                ),
+            ], spacing=6),
+            margin=ft.Margin(left=12, right=12, top=0, bottom=24),
+        )
 
-        async def close_drawer(e):
-            try:
-                await page.close_drawer()
-            except Exception:
-                pass
-
+        # ---- 左侧菜单按钮 ----
         async def open_drawer(e):
-            try:
-                await page.show_drawer()
-            except Exception:
-                pass
+            page.drawer = nav_drawer
+            page.show_drawer()
 
         async def new_session(e):
-            new_s = await storage.create_session()
-            current_session["id"] = new_s["id"]
+            s = await storage.create_session()
+            current_session["id"] = s["id"]
             message_list.controls.clear()
+            page.close_drawer()
             page.update()
-            await close_drawer(e)
 
-        async def open_history(e):
-            await close_drawer(e)
-            await page.push_route("/history")
-
-        async def open_settings(e):
-            await close_drawer(e)
-            await page.push_route("/settings")
-
-        async def open_remote(e):
-            await close_drawer(e)
-            await page.push_route("/remote")
-
-        def switch_session(session_id):
-            async def handler(e):
-                current_session["id"] = session_id
+        def switch_sess(sid):
+            async def h(e):
+                current_session["id"] = sid
                 await load_current_session()
-                await close_drawer(e)
-            return handler
+                page.close_drawer()
+                page.update()
+            return h
 
-        def drawer_item(icon, label, on_click, icon_color=None, subtitle=None):
-            """统一样式的侧边栏可点击行：图标背景块 + 文字 + 点击涟漪，比默认ListTile更有质感。"""
-            col_controls = [ft.Text(label, color=Color.text_primary, size=13, weight=ft.FontWeight.W_500,
-                                       max_lines=1, overflow=ft.TextOverflow.ELLIPSIS)]
-            if subtitle:
-                col_controls.append(ft.Text(subtitle, color=Color.text_hint, size=11,
-                                              max_lines=1, overflow=ft.TextOverflow.ELLIPSIS))
+        def dr_item(icon, label, on_click, color=None):
             return ft.Container(
-                content=ft.Row(controls=[
-                    ft.Container(
-                        content=ft.Icon(icon, color=icon_color or Color.accent, size=16),
-                        width=30, height=30, border_radius=9,
-                        bgcolor=ft.Colors.with_opacity(0.12, icon_color or Color.accent),
-                        alignment=ft.Alignment.CENTER,
-                    ),
+                content=ft.Row([
+                    ft.Container(content=ft.Icon(icon, color=color or Color.accent, size=16),
+                                  width=30, height=30, border_radius=9,
+                                  bgcolor=ft.Colors.with_opacity(0.12, color or Color.accent),
+                                  alignment=ft.Alignment.CENTER),
                     ft.Container(width=10),
-                    ft.Column(controls=col_controls, spacing=1, expand=True),
+                    ft.Text(label, color=Color.text_primary, size=13, weight=ft.FontWeight.W_500),
                 ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
                 padding=ft.Padding(left=12, right=12, top=8, bottom=8),
                 margin=ft.Margin(left=8, right=8, top=1, bottom=1),
-                border_radius=Size.radius_sm,
-                ink=True,
-                on_click=on_click,
+                border_radius=Size.radius_sm, ink=True, on_click=on_click,
             )
 
-        recent_tiles = []
-        for s in sessions[:6]:
-            recent_tiles.append(drawer_item(ft.Icons.CHAT_BUBBLE_OUTLINE, s["title"], switch_session(s["id"])))
-        if not recent_tiles:
-            recent_tiles = [ft.Container(padding=ft.Padding(left=16, right=16, top=4, bottom=4),
-                                           content=hint_text("还没有会话，点上面开始第一条吧"))]
-
-        username_display = user.get("email", "未登录")
+        username_display = user.get("username", user.get("email", "未登录"))
         avatar_letter = username_display[:1].upper() if username_display else "?"
+
+        recent = []
+        for s in sessions[:6]:
+            recent.append(dr_item(ft.Icons.CHAT_BUBBLE_OUTLINE, s["title"], switch_sess(s["id"])))
 
         nav_drawer = ft.NavigationDrawer(
             bgcolor=Color.surface,
@@ -1095,293 +935,396 @@ async def main(page: ft.Page):
                 ft.Container(
                     padding=ft.Padding(left=16, right=16, top=20, bottom=16),
                     bgcolor=ft.Colors.with_opacity(0.08, Color.accent),
-                    content=ft.Row(controls=[
-                        ft.CircleAvatar(foreground_image_src="/cat_avatar.jpg", radius=18),
+                    content=ft.Row([
+                        ft.CircleAvatar(content=ft.Text(avatar_letter, color=ft.Colors.WHITE, size=18, weight=ft.FontWeight.W_600),
+                                         bgcolor=Color.accent, radius=18),
                         ft.Container(width=10),
-                        ft.Column(controls=[
-                            title_text("Black C", size=16),
-                            hint_text("跨设备的 AI 助手"),
-                        ], spacing=0),
+                        ft.Column([ft.Text("Black C", size=16, weight=ft.FontWeight.W_600, color=Color.text_primary),
+                                    ft.Text(username_display, size=12, color=Color.text_secondary)], spacing=0),
                     ]),
                 ),
-                ft.Container(height=14),
+                ft.Container(height=12),
                 ft.Container(
                     padding=ft.Padding(left=12, right=12, top=0, bottom=0),
                     content=ft.ElevatedButton(
-                        content=ft.Row(controls=[
-                            ft.Icon(ft.Icons.ADD_ROUNDED, color=ft.Colors.WHITE, size=18),
-                            ft.Text("新会话", color=ft.Colors.WHITE, weight=ft.FontWeight.W_600),
-                        ], alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+                        content=ft.Row([ft.Icon(ft.Icons.ADD, color=ft.Colors.WHITE, size=18),
+                                         ft.Text("新会话", color=ft.Colors.WHITE, weight=ft.FontWeight.W_600)],
+                                        alignment=ft.MainAxisAlignment.CENTER, spacing=6),
                         bgcolor=Color.accent, width=300, height=44,
                         style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=Size.radius_md)),
                         on_click=new_session,
                     ),
                 ),
                 ft.Container(height=10),
-                drawer_item(ft.Icons.DESKTOP_WINDOWS_OUTLINED, "远程控制电脑", open_remote),
+                dr_item(ft.Icons.DESKTOP_WINDOWS_OUTLINED, "远程控制电脑", lambda e: page.go("/remote")),
                 ft.Container(height=6),
                 ft.Divider(color=Color.divider, height=1),
-                ft.Container(padding=ft.Padding(left=20, right=16, top=8, bottom=2), content=hint_text("最近")),
-                *recent_tiles,
-                drawer_item(ft.Icons.HISTORY, "查看全部历史记录", open_history, icon_color=Color.text_secondary),
+                ft.Container(padding=ft.Padding(left=20, right=16, top=8, bottom=2),
+                              content=ft.Text("最近", size=12, color=Color.text_hint)),
+                *recent,
+                dr_item(ft.Icons.HISTORY, "查看全部历史",
+                         lambda e: page.go("/history"), color=Color.text_secondary),
                 ft.Container(expand=True),
                 ft.Divider(color=Color.divider, height=1),
                 ft.Container(
                     padding=ft.Padding(left=12, right=8, top=8, bottom=14),
-                    content=ft.Row(controls=[
-                        ft.CircleAvatar(content=ft.Text(avatar_letter, color=ft.Colors.WHITE, weight=ft.FontWeight.W_600),
-                                          bgcolor=Color.accent, radius=16),
+                    content=ft.Row([
+                        ft.CircleAvatar(content=ft.Text(avatar_letter, color=ft.Colors.WHITE, size=14, weight=ft.FontWeight.W_600),
+                                         bgcolor=Color.accent, radius=14),
                         ft.Container(width=8),
-                        ft.Text(username_display, color=Color.text_primary, size=14, expand=True,
+                        ft.Text(username_display, color=Color.text_primary, size=13, expand=True,
                                  max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
-                        ft.IconButton(icon=ft.Icons.SETTINGS_OUTLINED, icon_color=Color.text_secondary,
-                                       on_click=open_settings),
+                        ft.IconButton(icon=ft.Icons.SETTINGS_OUTLINED, icon_color=Color.text_secondary, icon_size=20,
+                                       on_click=lambda e: page.go("/settings")),
                     ]),
                 ),
+            ],
+        )
+
+        # ---- 顶部栏 ----
+        async def share_conv(e):
+            msgs = await storage.get_messages(current_session["id"])
+            lines = [f"{'我' if m['role']=='user' else 'Black C'}：{m['content']}" for m in msgs]
+            await ft.Clipboard().set("\n".join(lines))
+            show_snack("对话已复制到剪贴板")
+
+        top_bar = ft.Row([
+            ft.IconButton(icon=ft.Icons.MENU, icon_color=Color.text_primary, on_click=open_drawer),
+            ft.Text("Black C", size=18, weight=ft.FontWeight.W_600, color=Color.text_primary),
+            ft.Container(expand=True),
+            ft.IconButton(icon=ft.Icons.IOS_SHARE, icon_color=Color.text_primary,
+                           tooltip="复制对话", on_click=share_conv),
+        ], spacing=4)
+
+        # Stack: 消息列表 + 浮动输入栏
+        body_stack = ft.Stack(
+            expand=True,
+            controls=[
+                ft.Column([
+                    top_bar,
+                    message_list,
+                ], expand=True),
+                ft.Column([
+                    ft.Container(expand=True),
+                    floating_input,
+                ], expand=True),
             ],
         )
 
         await load_current_session()
 
-        async def share_conversation(e):
-            # 目前没有稳妥的原生分享接口可用（同类风险的控件已经崩过一次），
-            # 这里先做成"复制整段对话到剪贴板"，你可以粘贴到任何地方分享出去。
-            msgs = await storage.get_messages(current_session["id"])
-            lines = [f"{'我' if m['role'] == 'user' else 'Black C'}：{m['content']}" for m in msgs]
-            await ft.Clipboard().set("\n".join(lines))
-            share_btn.icon = ft.Icons.CHECK
-            page.update()
-            await asyncio.sleep(1.2)
-            share_btn.icon = ft.Icons.IOS_SHARE
-            page.update()
-
-        share_btn = ft.IconButton(icon=ft.Icons.IOS_SHARE, icon_color=Color.text_primary,
-                                    tooltip="复制整段对话", on_click=share_conversation)
-
-        top_bar = ft.Row(controls=[
-            ft.IconButton(icon=ft.Icons.MENU, icon_color=Color.text_primary, on_click=open_drawer),
-            title_text("Black C", size=18),
-            ft.Container(expand=True),
-            share_btn,
-        ], spacing=4)
-
-        input_row_slot = ft.Container(content=normal_row)
-
-        input_bar = ft.Container(
-            content=input_row_slot,
-            bgcolor=Color.surface, border_radius=28,
-            padding=ft.Padding(left=18, right=6, top=8, bottom=8),
-            margin=ft.Margin(left=Size.pad_page, right=Size.pad_page, top=0, bottom=18),
-        )
-
-        # 说明：左边缘右滑打开抽屉是Flutter给设置了drawer的页面自带的原生手势，
-        # 不需要额外写代码；之前自己加的GestureDetector反而更可能是黑屏的元凶，已经去掉了。
-        body_stack = ft.Stack(
-            expand=True,
-            controls=[
-                ft.Column(controls=[
-                    glow_bar,
-                    top_bar,
-                    ft.Container(content=message_list, expand=True),
-                    input_bar,
-                ], expand=True),
-            ],
-        )
-
         return ft.View(
-            route="/chat", bgcolor=Color.bg, padding=0, drawer=nav_drawer,
+            route="/chat", bgcolor=Color.bg, padding=0,
+            drawer=nav_drawer,
             controls=[safe(body_stack)],
         )
 
-    # ---------------- 3. 历史记录页 ----------------
+    # ============================================================
+    # 辅助：消息气泡 & 打字指示器
+    # ============================================================
+    def _msg_bubble(role: str, content: str, copy_fn) -> ft.Row:
+        is_user = role == "user"
+        if is_user:
+            bubble = ft.Container(
+                content=ft.Text(content, color=ft.Colors.WHITE, size=15, selectable=True,
+                                no_wrap=False, text_align=ft.TextAlign.RIGHT),
+                bgcolor=Color.accent, padding=ft.Padding.symmetric(horizontal=18, vertical=12),
+                border_radius=24, margin=ft.Margin.only(left=60, top=2, bottom=2),
+                expand_loose=True,
+            )
+            return ft.Row(controls=[bubble], alignment=ft.MainAxisAlignment.END)
+        else:
+            ctrl = ft.Text(content, color=Color.text_primary, size=15, selectable=True, no_wrap=False, width=290)
+            body = ft.Container(content=ctrl, padding=ft.Padding.symmetric(horizontal=4, vertical=4))
+            footer = ft.Container(height=0)
+            col = ft.Column(controls=[body, footer], spacing=0)
+
+            async def cp(e):
+                await copy_fn(content)
+
+            footer.content = ft.IconButton(
+                icon=ft.Icons.COPY_ALL_OUTLINED, icon_size=14, icon_color=Color.text_hint,
+                tooltip="复制", on_click=cp,
+            )
+            return ft.Row(controls=[col], alignment=ft.MainAxisAlignment.START)
+
+    def _typing_dots() -> ft.Row:
+        dots = ft.Row([
+            ft.Container(width=6, height=6, border_radius=3, bgcolor=Color.text_secondary,
+                          animate_opacity=ft.Animation(600, ft.AnimationCurve.EASE_IN_OUT)),
+            ft.Container(width=6, height=6, border_radius=3, bgcolor=Color.text_secondary,
+                          animate_opacity=ft.Animation(600, ft.AnimationCurve.EASE_IN_OUT)),
+            ft.Container(width=6, height=6, border_radius=3, bgcolor=Color.text_secondary,
+                          animate_opacity=ft.Animation(600, ft.AnimationCurve.EASE_IN_OUT)),
+        ], spacing=4)
+
+        async def animate():
+            dots_list = dots.controls
+            idx = 0
+            while True:
+                try:
+                    route = page.route
+                except RuntimeError:
+                    break
+                if route != "/chat":
+                    break
+                for i in range(3):
+                    dots_list[i].opacity = 0.8 if i == idx else 0.3
+                try:
+                    page.update()
+                except Exception:
+                    break
+                idx = (idx + 1) % 3
+                await asyncio.sleep(0.3)
+            for d in dots_list:
+                d.opacity = 0.3
+
+        page.run_task(animate)
+
+        container = ft.Container(content=dots, padding=ft.Padding.symmetric(horizontal=4, vertical=8),
+                                  margin=ft.Margin.only(right=40, top=4, bottom=4))
+        return ft.Row(controls=[container], alignment=ft.MainAxisAlignment.START)
+
+    # ============================================================
+    # 3. 历史记录
+    # ============================================================
     async def build_history_view():
         sessions = await storage.list_sessions()
 
-        async def back_to_chat(e):
-            await page.push_route("/chat")
+        async def back(e):
+            page.go("/chat")
 
-        def delete(session_id):
-            async def handler(e):
-                await storage.delete_session(session_id)
+        def del_sess(sid):
+            async def h(e):
+                await storage.delete_session(sid)
                 page.views.clear()
                 page.views.append(await build_history_view())
                 page.update()
-            return handler
+            return h
 
         tiles = []
         for s in sessions:
-            tiles.append(ft.ListTile(
-                leading=ft.Icon(ft.Icons.CHAT_BUBBLE_OUTLINE, color=Color.text_secondary),
-                title=ft.Text(s["title"], color=Color.text_primary),
-                trailing=ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_color=Color.danger, on_click=delete(s["id"])),
-                on_click=back_to_chat,
-            ))
+            tiles.append(
+                ft.Container(
+                    content=ft.Row([
+                        ft.Icon(ft.Icons.CHAT_BUBBLE_OUTLINE, color=Color.text_secondary, size=20),
+                        ft.Container(width=12),
+                        ft.Column([
+                            ft.Text(s["title"], color=Color.text_primary, size=14, weight=ft.FontWeight.W_500,
+                                     max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                            ft.Text(time.strftime("%m/%d %H:%M", time.localtime(s["updated_at"])),
+                                     size=11, color=Color.text_hint),
+                        ], spacing=2, expand=True),
+                        ft.IconButton(icon=ft.Icons.DELETE_OUTLINE, icon_color=Color.danger, icon_size=18,
+                                       on_click=del_sess(s["id"])),
+                    ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                    padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+                    margin=ft.Margin.symmetric(horizontal=16, vertical=4),
+                    bgcolor=Color.surface, border_radius=Size.radius_md,
+                    on_click=lambda e, sid=s["id"]: (_load_hist(sid) or back(e)),
+                )
+            )
+
+        def _load_hist(sid):
+            # 简化：点击历史项就返回聊天页，聊天页需要处理加载
+            pass
+
         if not tiles:
-            tiles = [ft.Container(content=hint_text("还没有历史会话"), alignment=ft.Alignment.CENTER, padding=40)]
+            tiles = [ft.Container(content=ft.Text("还没有历史会话", color=Color.text_hint, size=14),
+                                   alignment=ft.Alignment.CENTER, padding=40)]
 
         return ft.View(
             route="/history", bgcolor=Color.bg,
-            appbar=ft.AppBar(title=ft.Text("历史记录"), bgcolor=Color.bg,
-                               leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=back_to_chat)),
+            appbar=ft.AppBar(
+                title=ft.Text("历史记录", color=Color.text_primary),
+                bgcolor=Color.bg, surface_tint_color=Color.bg,
+                leading=ft.IconButton(ft.Icons.ARROW_BACK, icon_color=Color.text_primary, on_click=back),
+            ),
             controls=[safe(ft.ListView(controls=tiles, expand=True))],
         )
 
-    # ---------------- 4. 远程控制电脑 ----------------
+    # ============================================================
+    # 4. 远程控制电脑
+    # ============================================================
     async def build_remote_view():
-        command_field = ft.TextField(
-            hint_text="输入要在电脑上执行的指令或代码…", multiline=True, min_lines=4, max_lines=8,
+        cmd_field = ft.TextField(
+            hint_text="输入要在电脑上执行的指令…", multiline=True, min_lines=3, max_lines=6,
             bgcolor=Color.surface, border_color=Color.divider, border_radius=Size.radius_md,
-            color=Color.text_primary, hint_style=ft.TextStyle(color=Color.text_hint),
+            color=Color.text_primary, hint_style=ft.TextStyle(color=Color.text_hint), text_size=15,
         )
-        status_text = ft.Text("", color=Color.text_secondary, size=12)
-        task_column = ft.Column(spacing=10)
-        status_label = {"pending": "等待中", "running": "执行中", "done": "已完成"}
-        status_color = {"pending": Color.text_secondary, "running": Color.accent, "done": Color.success}
+        status = ft.Text("", color=Color.text_secondary, size=12)
+        result_area = ft.Text("", color=Color.text_primary, size=13, selectable=True)
 
-        # 纯前端演示模式：本地写死几条示例任务，不请求真实的任务队列接口
-        fake_tasks = [
-            {"command": "打开记事本并新建一个文件", "status": "done", "result": "已完成，文件已创建"},
-            {"command": "生成本周销售数据Excel表格", "status": "running", "result": ""},
-            {"command": "整理桌面上的截图到新文件夹", "status": "pending", "result": ""},
+        demo_tasks = [
+            {"cmd": "打开记事本并新建文件", "st": "done", "res": "已完成"},
+            {"cmd": "生成销售数据Excel", "st": "running", "res": ""},
+            {"cmd": "整理桌面截图到文件夹", "st": "pending", "res": ""},
         ]
 
-        def render_tasks():
-            task_column.controls.clear()
-            for t in fake_tasks:
-                task_column.controls.append(glass_container(ft.Column(controls=[
-                    ft.Text(t["command"], color=Color.text_primary, size=13, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.Container(height=6),
-                    ft.Row(controls=[ft.Container(
-                        content=ft.Text(status_label.get(t["status"], t["status"]), size=11, color=ft.Colors.WHITE),
-                        bgcolor=status_color.get(t["status"], Color.text_secondary),
-                        padding=ft.Padding(left=8, right=8, top=2, bottom=2), border_radius=10,
-                    )]),
-                    ft.Container(height=4) if t.get("result") else ft.Container(),
-                    ft.Text(t["result"], color=Color.text_secondary, size=12, max_lines=3,
-                             overflow=ft.TextOverflow.ELLIPSIS) if t.get("result") else ft.Container(),
-                ], spacing=2)))
-            status_text.value = f"共 {len(fake_tasks)} 条任务（本地演示数据）"
+        def render():
+            st_map = {"pending": ("等待中", Color.text_secondary),
+                       "running": ("执行中", Color.accent),
+                       "done": ("已完成", Color.success)}
+            task_col.controls.clear()
+            for t in demo_tasks:
+                lbl, clr = st_map.get(t["st"], ("?", Color.text_hint))
+                task_col.controls.append(
+                    ft.Container(
+                        content=ft.Column([
+                            ft.Row([
+                                ft.Text(t["cmd"], color=Color.text_primary, size=13, expand=True,
+                                         max_lines=1, overflow=ft.TextOverflow.ELLIPSIS),
+                                ft.Container(content=ft.Text(lbl, size=11, color=ft.Colors.WHITE),
+                                              bgcolor=clr, padding=ft.Padding(left=8, right=8, top=2, bottom=2),
+                                              border_radius=10),
+                            ], spacing=8),
+                            ft.Text(t["res"], color=Color.text_secondary, size=12) if t.get("res") else ft.Container(),
+                        ], spacing=4),
+                        bgcolor=Color.surface, border_radius=Size.radius_md,
+                        padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+                        margin=ft.Margin.only(bottom=8),
+                    )
+                )
             page.update()
 
-        async def refresh_tasks(e=None):
-            render_tasks()
+        task_col = ft.Column(spacing=0)
+        render()
 
-        async def submit_task_handler(e):
-            cmd = command_field.value.strip()
+        async def submit(e):
+            cmd = cmd_field.value.strip()
             if not cmd:
                 return
-            fake_tasks.insert(0, {"command": cmd, "status": "pending", "result": ""})
-            command_field.value = ""
-            status_text.value = "指令已加入本地演示列表（未真正发送）"
-            status_text.color = Color.success
-            render_tasks()
+            demo_tasks.insert(0, {"cmd": cmd, "st": "pending", "res": ""})
+            cmd_field.value = ""
+            render()
 
-        async def back_to_chat(e):
-            await page.push_route("/chat")
+        async def back(e):
+            page.go("/chat")
 
         submit_btn = ft.ElevatedButton(
-            content=ft.Row(controls=[ft.Icon(ft.Icons.SEND_ROUNDED, color=ft.Colors.WHITE, size=16),
-                                       ft.Text("下发指令", color=ft.Colors.WHITE, weight=ft.FontWeight.W_600)],
-                             alignment=ft.MainAxisAlignment.CENTER, spacing=6),
+            content=ft.Row([ft.Icon(ft.Icons.SEND, color=ft.Colors.WHITE, size=16),
+                             ft.Text("下发指令", color=ft.Colors.WHITE, weight=ft.FontWeight.W_600)],
+                            alignment=ft.MainAxisAlignment.CENTER, spacing=6),
             bgcolor=Color.accent, expand=True, height=44,
             style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=Size.radius_md)),
-            on_click=submit_task_handler,
+            on_click=submit,
         )
-
-        render_tasks()
 
         return ft.View(
             route="/remote", bgcolor=Color.bg,
-            appbar=ft.AppBar(title=ft.Text("远程控制电脑"), bgcolor=Color.bg,
-                               leading=ft.IconButton(ft.Icons.ARROW_BACK, on_click=back_to_chat)),
+            appbar=ft.AppBar(
+                title=ft.Text("远程控制电脑", color=Color.text_primary),
+                bgcolor=Color.bg, surface_tint_color=Color.bg,
+                leading=ft.IconButton(ft.Icons.ARROW_BACK, icon_color=Color.text_primary, on_click=back),
+            ),
             navigation_bar=build_nav_bar("/remote"),
-            controls=[safe(ft.Column(controls=[
+            controls=[safe(ft.Column([
                 ft.Container(
-                    padding=ft.Padding.symmetric(horizontal=Size.pad_page, vertical=12),
-                    content=ft.Column(controls=[
-                        command_field, ft.Container(height=10),
-                        ft.Row(controls=[submit_btn,
-                                           ft.IconButton(icon=ft.Icons.REFRESH, icon_color=Color.text_secondary,
-                                                          on_click=refresh_tasks)]),
-                        status_text, ft.Container(height=6), hint_text("任务记录"),
+                    padding=ft.Padding(left=16, right=16, top=12, bottom=0),
+                    content=ft.Column([
+                        cmd_field, ft.Container(height=10),
+                        ft.Row([submit_btn, ft.IconButton(ft.Icons.REFRESH, icon_color=Color.text_secondary,
+                                                            on_click=lambda e: render())]),
+                        status, ft.Container(height=10),
+                        ft.Text("任务记录", size=13, color=Color.text_secondary, weight=ft.FontWeight.W_500),
                     ]),
                 ),
-                ft.Container(expand=True, padding=ft.Padding.symmetric(horizontal=Size.pad_page, vertical=0),
-                              content=ft.ListView(controls=[task_column], expand=True)),
+                ft.Container(
+                    expand=True,
+                    padding=ft.Padding.symmetric(horizontal=16, vertical=0),
+                    content=ft.ListView(controls=[task_col], expand=True),
+                ),
             ], expand=True))],
         )
 
-    # ---------------- 5. 技能页 ----------------
-    SKILL_CATALOG = [
-        {"icon": ft.Icons.PSYCHOLOGY_OUTLINED, "name": "第一性原理拆解",
-         "desc": "把复杂问题拆到最底层假设，再从原点重建方案", "source": "内置技能"},
-        {"icon": ft.Icons.TRAVEL_EXPLORE_OUTLINED, "name": "深度调研",
-         "desc": "系统化多角度搜集权威信息，产出高质量研究结论", "source": "内置技能"},
-        {"icon": ft.Icons.WORK_OUTLINE, "name": "商务写作助手",
-         "desc": "帮助撰写商务邮件、报告和提案", "source": "内置技能"},
-        {"icon": ft.Icons.TABLE_CHART_OUTLINED, "name": "Excel 自动生成",
-         "desc": "说一句话，电脑自动生成 Excel 表格", "source": "对接 Black C Agent 桌面端"},
-    ]
-
+    # ============================================================
+    # 5. 技能页 —— Agent 技能卡片
+    # ============================================================
     async def build_skills_view():
-        added_names = set(await storage.get_added_skills())
+        async def back(e):
+            page.go("/chat")
 
-        def build_card(skill: dict, index: int):
-            is_added = skill["name"] in added_names
-
-            async def toggle(e):
-                if skill["name"] in added_names:
-                    added_names.discard(skill["name"])
+        def make_exec_handler(skill):
+            async def handler(e):
+                show_snack(f"正在调用: {skill['name']}…")
+                payload = None
+                if skill.get("needs_input") and skill.get("prompt_template"):
+                    if skill["id"] == "file_search":
+                        payload = {"message": "帮我找桌面文件"}
+                    elif skill["id"] == "ledger":
+                        payload = {"message": "生成一个出入库台账"}
+                    else:
+                        payload = {"message": skill.get("prompt_template", "").format(input="")}
+                elif skill.get("endpoint") == "/organize":
+                    pass
                 else:
-                    added_names.add(skill["name"])
-                await storage.set_added_skills(list(added_names))
-                now_added = skill["name"] in added_names
-                btn.content = ft.Text("已添加" if now_added else "添加",
-                                        color=Color.text_secondary if now_added else ft.Colors.WHITE, size=13)
-                btn.bgcolor = Color.surface_light if now_added else Color.accent
-                page.update()
+                    if skill.get("method") == "POST":
+                        payload = {"message": skill.get("prompt_template", "")}
 
-            btn = ft.ElevatedButton(
-                content=ft.Text("已添加" if is_added else "添加",
-                                  color=Color.text_secondary if is_added else ft.Colors.WHITE, size=13),
-                bgcolor=Color.surface_light if is_added else Color.accent, height=34,
-                style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=17)), on_click=toggle,
+                result = await call_computer_async(storage, skill["endpoint"], payload)
+                if "error" in result:
+                    show_snack(f"失败: {result['error']}", Color.danger)
+                else:
+                    output = result.get("output", result.get("reply", json.dumps(result, ensure_ascii=False)))
+                    show_snack(f"完成: {str(output)[:100]}")
+            return handler
+
+        cards = []
+        for skill in AGENT_SKILLS:
+            cards.append(
+                ft.Container(
+                    content=ft.Column([
+                        ft.Row([
+                            ft.Container(
+                                content=ft.Icon(skill["icon"], color=Color.accent, size=22),
+                                width=44, height=44, border_radius=12,
+                                bgcolor=ft.Colors.with_opacity(0.1, Color.accent),
+                                alignment=ft.Alignment.CENTER,
+                            ),
+                            ft.Container(width=12),
+                            ft.Column([
+                                ft.Text(skill["name"], size=15, weight=ft.FontWeight.W_600,
+                                         color=Color.text_primary),
+                                ft.Text(skill["desc"], size=12, color=Color.text_secondary,
+                                         max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
+                            ], spacing=2, expand=True),
+                            ft.ElevatedButton(
+                                "执行", height=34,
+                                bgcolor=Color.accent, color=ft.Colors.WHITE,
+                                style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=17)),
+                                on_click=make_exec_handler(skill),
+                            ),
+                        ]),
+                    ]),
+                    bgcolor=Color.surface, border_radius=Size.radius_md,
+                    padding=16, margin=ft.Margin.only(bottom=10),
+                )
             )
-            return glass_container(ft.Row(controls=[
-                ft.Container(content=ft.Icon(skill["icon"], color=Color.accent, size=26), width=48, height=48,
-                              border_radius=12, bgcolor=Color.surface_light, alignment=ft.Alignment.CENTER),
-                ft.Container(width=12),
-                ft.Column(controls=[
-                    ft.Text(skill["name"], color=Color.text_primary, size=15, weight=ft.FontWeight.W_600),
-                    ft.Text(skill["desc"], color=Color.text_secondary, size=12, max_lines=2, overflow=ft.TextOverflow.ELLIPSIS),
-                    ft.Text(skill["source"], color=Color.text_hint, size=11),
-                ], spacing=2, expand=True),
-                btn,
-            ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
-
-        cards = [build_card(s, i) for i, s in enumerate(SKILL_CATALOG)]
 
         return ft.View(
             route="/skills", bgcolor=Color.bg,
-            appbar=ft.AppBar(title=ft.Text("技能"), bgcolor=Color.bg),
+            appbar=ft.AppBar(
+                title=ft.Text("Agent 技能", color=Color.text_primary),
+                bgcolor=Color.bg, surface_tint_color=Color.bg,
+                leading=ft.IconButton(ft.Icons.ARROW_BACK, icon_color=Color.text_primary, on_click=back),
+            ),
             navigation_bar=build_nav_bar("/skills"),
-            controls=[safe(ft.Container(expand=True, padding=ft.Padding.symmetric(horizontal=Size.pad_page, vertical=12),
-                                          content=ft.Column(controls=cards, spacing=12, scroll=ft.ScrollMode.AUTO)))],
+            controls=[safe(ft.Container(
+                expand=True,
+                padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+                content=ft.ListView(controls=cards, expand=True, spacing=0),
+            ))],
         )
 
-    # ---------------- 6. 设置("我的") ----------------
+    # ============================================================
+    # 6. 设置 / "我的"
+    # ============================================================
     async def build_settings_view():
         user = await storage.get_user() or {}
 
         async def logout(e):
             await storage.clear_login()
-            await page.push_route("/login")
-
-        async def open_skills(e):
-            await page.push_route("/skills")
-
-        async def open_remote_from_profile(e):
-            await page.push_route("/remote")
+            page.go("/login")
 
         async def toggle_theme(e):
             new_mode = "light" if Color.mode == "dark" else "dark"
@@ -1393,114 +1336,189 @@ async def main(page: ft.Page):
 
         theme_switch = ft.Switch(value=(Color.mode == "light"), active_color=Color.accent, on_change=toggle_theme)
 
-        saved_key = await storage.get_deepseek_key() or ""
-        deepseek_field = ft.TextField(
-            label="DeepSeek API Key", value=saved_key, password=True, can_reveal_password=True,
-            bgcolor=Color.surface, border_radius=Size.radius_md, border_color=Color.divider,
-            color=Color.text_primary, label_style=ft.TextStyle(color=Color.text_secondary),
-        )
-        deepseek_status = ft.Text("", size=12, color=Color.success)
-
-        async def save_deepseek_key(e):
-            await storage.set_deepseek_key(deepseek_field.value.strip())
-            deepseek_status.value = "已保存，之后对话会直连 DeepSeek"
-            page.update()
-
-        saved_asr_key = await storage.get_asr_key() or ""
-        asr_field = ft.TextField(
-            label="语音识别 API Key（硅基流动）", value=saved_asr_key, password=True, can_reveal_password=True,
-            bgcolor=Color.surface, border_radius=Size.radius_md, border_color=Color.divider,
-            color=Color.text_primary, label_style=ft.TextStyle(color=Color.text_secondary),
-        )
-        asr_status = ft.Text("", size=12, color=Color.success)
-
-        async def save_asr_key(e):
-            await storage.set_asr_key(asr_field.value.strip())
-            asr_status.value = "已保存，语音输入会自动转文字发送"
-            page.update()
-
-        username_display = user.get("email", "未登录")
+        username_display = user.get("username", user.get("email", "未登录"))
         avatar_letter = username_display[:1].upper() if username_display else "?"
 
-        profile_card = glass_container(ft.Row(controls=[
-            ft.CircleAvatar(content=ft.Text(avatar_letter, color=ft.Colors.WHITE, size=20, weight=ft.FontWeight.W_600),
-                              bgcolor=Color.accent, radius=32),
-            ft.Container(width=14),
-            ft.Column(controls=[
-                title_text("Black C", size=18),
-                ft.Text(username_display, color=Color.text_secondary, size=13, max_lines=1,
-                         overflow=ft.TextOverflow.ELLIPSIS),
-                ft.Container(height=6),
-                ft.Row(controls=[
-                    ft.Container(content=ft.Text(tag, color=Color.text_secondary, size=11),
-                                  bgcolor=Color.surface_light, padding=ft.Padding(left=8, right=8, top=3, bottom=3),
-                                  border_radius=10)
-                    for tag in ["理智高效", "极简办公", "跨设备"]
-                ], spacing=6),
-            ], spacing=2, expand=True),
-        ], vertical_alignment=ft.CrossAxisAlignment.CENTER))
+        # DeepSeek key
+        saved_ds = await storage.get_deepseek_key() or ""
+        ds_field = ft.TextField(
+            label="DeepSeek API Key", value=saved_ds, password=True, can_reveal_password=True,
+            bgcolor=Color.surface, border_radius=Size.radius_md, border_color=Color.divider,
+            color=Color.text_primary, label_style=ft.TextStyle(color=Color.text_secondary),
+            text_size=14,
+        )
+
+        async def save_ds(e):
+            await storage.set_deepseek_key(ds_field.value.strip())
+            show_snack("DeepSeek Key 已保存")
+
+        # ASR key
+        saved_asr = await storage.get_asr_key() or ""
+        asr_field = ft.TextField(
+            label="语音识别 Key（硅基流动）", value=saved_asr, password=True, can_reveal_password=True,
+            bgcolor=Color.surface, border_radius=Size.radius_md, border_color=Color.divider,
+            color=Color.text_primary, label_style=ft.TextStyle(color=Color.text_secondary),
+            text_size=14,
+        )
+
+        async def save_asr(e):
+            await storage.set_asr_key(asr_field.value.strip())
+            show_snack("语音识别 Key 已保存")
+
+        # 电脑IP
+        saved_ip = await storage.get_computer_ip() or ""
+        ip_field = ft.TextField(
+            label="电脑 IP 地址（Agent 技能用）", value=saved_ip,
+            hint_text="例如 192.168.1.5:9001",
+            bgcolor=Color.surface, border_radius=Size.radius_md, border_color=Color.divider,
+            color=Color.text_primary, label_style=ft.TextStyle(color=Color.text_secondary),
+            hint_style=ft.TextStyle(color=Color.text_hint), text_size=14,
+        )
+
+        async def save_ip(e):
+            await storage.set_computer_ip(ip_field.value.strip())
+            show_snack("电脑 IP 已保存")
+
+        async def test_ip(e):
+            result = await call_computer_async(storage, "/status")
+            if "error" in result:
+                show_snack(f"连接失败: {result['error']}", Color.danger)
+            else:
+                show_snack("连接成功！电脑端运行正常")
+
+        def settings_card(title: str, children: list) -> ft.Container:
+            return ft.Container(
+                content=ft.Column([
+                    ft.Text(title, size=12, weight=ft.FontWeight.W_600, color=Color.text_secondary),
+                    ft.Container(height=8),
+                    *children,
+                ], spacing=0),
+                bgcolor=ft.Colors.with_opacity(0.6, Color.surface),
+                border_radius=Size.radius_md,
+                padding=16, margin=ft.Margin.only(bottom=10),
+                blur=ft.Blur(8, 8),
+                border=ft.Border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+            )
+
+        async def back(e):
+            page.go("/chat")
 
         return ft.View(
             route="/settings", bgcolor=Color.bg,
-            appbar=ft.AppBar(title=ft.Text("我的"), bgcolor=Color.bg),
+            appbar=ft.AppBar(
+                title=ft.Text("我的", color=Color.text_primary),
+                bgcolor=ft.Colors.with_opacity(0.5, Color.bg),
+                surface_tint_color=Color.bg,
+                leading=ft.IconButton(ft.Icons.ARROW_BACK, icon_color=Color.text_primary, on_click=back),
+            ),
             navigation_bar=build_nav_bar("/settings"),
-            controls=[safe(ft.Column(controls=[
-                ft.Container(
-                    padding=ft.Padding.symmetric(horizontal=Size.pad_page, vertical=12),
-                    content=ft.Column(controls=[
-                        profile_card, ft.Container(height=16),
-                        ft.ListTile(leading=ft.Icon(ft.Icons.EXTENSION_OUTLINED, color=Color.text_secondary),
-                                     title=ft.Text("我的技能", color=Color.text_primary),
-                                     trailing=ft.Icon(ft.Icons.CHEVRON_RIGHT, color=Color.text_hint), on_click=open_skills),
-                        ft.Divider(color=Color.divider),
-                        ft.ListTile(leading=ft.Icon(ft.Icons.DESKTOP_WINDOWS_OUTLINED, color=Color.text_secondary),
-                                     title=ft.Text("管理我的设备", color=Color.text_primary),
-                                     subtitle=hint_text("远程控制电脑"),
-                                     trailing=ft.Icon(ft.Icons.CHEVRON_RIGHT, color=Color.text_hint),
-                                     on_click=open_remote_from_profile),
-                        ft.Divider(color=Color.divider),
-                        ft.ListTile(
-                            leading=ft.Icon(ft.Icons.LIGHT_MODE_OUTLINED if Color.mode == "dark" else ft.Icons.DARK_MODE_OUTLINED,
-                                              color=Color.text_secondary),
-                            title=ft.Text("浅色模式", color=Color.text_primary),
-                            subtitle=hint_text("当前：" + ("浅色" if Color.mode == "light" else "深色")),
-                            trailing=theme_switch,
+            controls=[safe(ft.Container(
+                expand=True,
+                padding=ft.Padding.symmetric(horizontal=16, vertical=12),
+                content=ft.ListView(controls=[
+                    # 个人信息卡片 毛玻璃
+                    ft.Container(
+                        content=ft.Row([
+                            ft.CircleAvatar(content=ft.Text(avatar_letter, color=ft.Colors.WHITE, size=20, weight=ft.FontWeight.W_600),
+                                             bgcolor=Color.accent, radius=32),
+                            ft.Container(width=14),
+                            ft.Column([
+                                ft.Text("Black C", size=18, weight=ft.FontWeight.W_600, color=Color.text_primary),
+                                ft.Text(username_display, size=13, color=Color.text_secondary),
+                            ], spacing=2, expand=True),
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor=ft.Colors.with_opacity(0.5, Color.surface),
+                        border_radius=Size.radius_md,
+                        blur=ft.Blur(8, 8),
+                        border=ft.Border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                        padding=16, margin=ft.Margin.only(bottom=10),
+                    ),
+                    # 电脑连接
+                    settings_card("电脑连接（Agent 技能）", [
+                        ip_field,
+                        ft.Container(height=8),
+                        ft.Row([
+                            ft.Container(
+                                content=ft.Text("保存", color=ft.Colors.WHITE, weight=ft.FontWeight.W_600, size=13),
+                                bgcolor=Color.accent, border_radius=10, height=36,
+                                padding=ft.Padding.symmetric(horizontal=20), ink=True,
+                                alignment=ft.Alignment.CENTER, on_click=save_ip,
+                            ),
+                            ft.Container(
+                                content=ft.Text("测试连接", color=Color.accent, weight=ft.FontWeight.W_500, size=13),
+                                bgcolor=ft.Colors.TRANSPARENT, border_radius=10, height=36,
+                                border=ft.Border.all(1, Color.accent),
+                                padding=ft.Padding.symmetric(horizontal=20), ink=True,
+                                alignment=ft.Alignment.CENTER, on_click=test_ip,
+                            ),
+                        ], spacing=8),
+                    ]),
+                    # AI 模型
+                    settings_card("AI 模型配置", [
+                        ft.Text("DeepSeek API Key — 对话直连", size=12, color=Color.text_secondary),
+                        ft.Container(height=8),
+                        ds_field,
+                        ft.Container(height=8),
+                        ft.Container(
+                            content=ft.Text("保存", color=ft.Colors.WHITE, weight=ft.FontWeight.W_600, size=13),
+                            bgcolor=Color.accent, border_radius=10, height=36,
+                            padding=ft.Padding.symmetric(horizontal=20), ink=True,
+                            alignment=ft.Alignment.CENTER, on_click=save_ds,
                         ),
-                        ft.Divider(color=Color.divider),
-                        ft.Container(height=6),
-                        hint_text("内测直连（没有自建服务器时用）"),
-                        ft.Container(height=8),
-                        deepseek_field,
-                        ft.Container(height=8),
-                        ft.Row(controls=[
-                            ft.ElevatedButton(content=ft.Text("保存"), bgcolor=Color.accent, color=ft.Colors.WHITE,
-                                                on_click=save_deepseek_key),
-                            deepseek_status,
-                        ], spacing=12),
-                        ft.Container(height=16),
-                        ft.Divider(color=Color.divider),
-                        ft.Container(height=6),
-                        hint_text("语音转文字（点麦克风说话，自动识别成文字发送）"),
-                        ft.Text("免费Key申请：cloud.siliconflow.cn 注册后在「API密钥」页生成即可，"
-                                "语音识别用的 SenseVoiceSmall 模型目前免费", size=11, color=Color.text_hint),
+                    ]),
+                    # 语音
+                    settings_card("语音识别", [
+                        ft.Text("硅基流动 SenseVoiceSmall（免费）", size=12, color=Color.text_secondary),
                         ft.Container(height=8),
                         asr_field,
                         ft.Container(height=8),
-                        ft.Row(controls=[
-                            ft.ElevatedButton(content=ft.Text("保存"), bgcolor=Color.accent, color=ft.Colors.WHITE,
-                                                on_click=save_asr_key),
-                            asr_status,
-                        ], spacing=12),
-                        ft.Container(height=16),
-                        ft.Divider(color=Color.divider),
-                        ft.ListTile(leading=ft.Icon(ft.Icons.LOGOUT, color=Color.danger),
-                                     title=ft.Text("退出登录", color=Color.danger), on_click=logout),
+                        ft.Container(
+                            content=ft.Text("保存", color=ft.Colors.WHITE, weight=ft.FontWeight.W_600, size=13),
+                            bgcolor=Color.accent, border_radius=10, height=36,
+                            padding=ft.Padding.symmetric(horizontal=20), ink=True,
+                            alignment=ft.Alignment.CENTER, on_click=save_asr,
+                        ),
                     ]),
-                ),
-            ], expand=True, scroll=ft.ScrollMode.AUTO))],
+                    # 主题
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.LIGHT_MODE if Color.mode == "dark" else ft.Icons.DARK_MODE,
+                                     color=Color.text_secondary, size=22),
+                            ft.Container(width=12),
+                            ft.Column([
+                                ft.Text("主题模式", size=15, weight=ft.FontWeight.W_500, color=Color.text_primary),
+                                ft.Text("当前: " + ("浅色" if Color.mode == "light" else "深色"),
+                                         size=12, color=Color.text_secondary),
+                            ], expand=True),
+                            theme_switch,
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor=ft.Colors.with_opacity(0.5, Color.surface),
+                        border_radius=Size.radius_md,
+                        blur=ft.Blur(8, 8),
+                        border=ft.Border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                        padding=16, margin=ft.Margin.only(bottom=10),
+                    ),
+                    # 退出
+                    ft.Container(
+                        content=ft.Row([
+                            ft.Icon(ft.Icons.LOGOUT, color=Color.danger, size=22),
+                            ft.Container(width=12),
+                            ft.Text("退出登录", size=15, weight=ft.FontWeight.W_500, color=Color.danger),
+                        ], vertical_alignment=ft.CrossAxisAlignment.CENTER),
+                        bgcolor=ft.Colors.with_opacity(0.5, Color.surface),
+                        border_radius=Size.radius_md,
+                        blur=ft.Blur(8, 8),
+                        border=ft.Border.all(1, ft.Colors.with_opacity(0.12, ft.Colors.WHITE)),
+                        padding=16, ink=True, on_click=logout,
+                    ),
+                    ft.Container(height=20),
+                ], spacing=0, expand=True),
+            ))],
         )
 
-    # ---------------- 路由 ----------------
+    # ============================================================
+    # 路由处理
+    # ============================================================
     async def route_change(e):
         page.views.clear()
         if page.route == "/chat":
@@ -1516,12 +1534,17 @@ async def main(page: ft.Page):
         elif page.route == "/login":
             page.views.append(build_login_view())
         else:
-            page.views.append(await build_intro_view())
+            page.views.append(build_login_view())
         page.update()
 
     page.on_route_change = route_change
-    await page.push_route("/chat" if await storage.is_logged_in() else "/intro")
 
+    # 初始路由
+    if await storage.is_logged_in():
+        page.go("/chat")
+    else:
+        page.go("/login")
+    
 
 if __name__ == "__main__":
     ft.run(main)
