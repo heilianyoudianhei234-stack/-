@@ -508,7 +508,7 @@ async def main(page: ft.Page):
                     # 渐变背景层
                     ft.Container(
                         gradient=ft.LinearGradient(
-                            begin=ft.Alignment.topLeft, end=ft.Alignment.bottomRight,
+                            begin=ft.Alignment.top_left, end=ft.Alignment.bottom_right,
                             colors=["#0F0F0F", "#1A1A2E", "#16213E", "#0F3460"],
                         ),
                         expand=True,
